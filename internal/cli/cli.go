@@ -12,7 +12,7 @@ import (
 const usage = `pre-print-tools validates and repairs SVGs for print and web.
 
 Usage:
-  pre-print-tools check [--target 20ft|1.2m|90in|4k|8k] FILE.svg
+  pre-print-tools check [--target screen|paper|fabric|vinyl|20ft|4k] FILE.svg
   pre-print-tools fix [--target TARGET] [--unsafe] [-o OUTPUT.svg] FILE.svg
 
 Commands:
@@ -43,7 +43,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 func runCheck(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	target := fs.String("target", "", "estimated target size, e.g. 20ft, 1.2m, 90in, 4k, 8k")
+	target := fs.String("target", "", "output material or estimated size, e.g. screen, paper, fabric, vinyl, 20ft, 4k")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -68,7 +68,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 func runFix(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("fix", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	target := fs.String("target", "", "estimated target size, e.g. 20ft, 1.2m, 90in, 4k, 8k")
+	target := fs.String("target", "", "output material or estimated size, e.g. screen, paper, fabric, vinyl, 20ft, 4k")
 	output := fs.String("o", "", "output path; defaults to overwriting FILE.svg")
 	unsafe := fs.Bool("unsafe", false, "allow broader transformations that may change rendering")
 	if err := fs.Parse(args); err != nil {

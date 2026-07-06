@@ -44,6 +44,10 @@ type SVGMeta struct {
 	EventAttrs   int
 	ExternalRefs int
 	RasterImages int
+	TextElements int
+	Filters      int
+	Masks        int
+	ClipPaths    int
 }
 
 func CheckFile(path string, rawTarget string) (Report, error) {
@@ -114,10 +118,17 @@ func (r *Report) addCoreIssues() {
 }
 
 func (r *Report) addTargetIssues() {
-	if r.Target.Raw == "" || r.Meta.WidthPixels == 0 {
+	if r.Target.Raw == "" {
 		return
 	}
 
+	if r.Target.Material != "" {
+		r.addMaterialIssues()
+	}
+
+	if r.Meta.WidthPixels == 0 {
+		return
+	}
 	if r.Target.WidthInches > 0 {
 		ppi := r.Meta.WidthPixels / r.Target.WidthInches
 		switch {
@@ -130,6 +141,40 @@ func (r *Report) addTargetIssues() {
 
 	if r.Target.PixelsWide > 0 && r.Meta.WidthPixels > float64(r.Target.PixelsWide)*1.5 {
 		r.Issues = append(r.Issues, Issue{SeverityInfo, "oversized-for-target", "SVG width is much larger than the target raster width"})
+	}
+}
+
+func (r *Report) addMaterialIssues() {
+	material := r.Target.Material
+	if material.NeedsPhysicalSize() && r.Target.WidthInches == 0 {
+		r.Issues = append(r.Issues, Issue{SeverityInfo, "target-size-recommended", "provide a physical size target as well when checking effective raster resolution"})
+	}
+
+	if material.NeedsPureVectorGeometry() {
+		if r.Meta.RasterImages > 0 {
+			r.Issues = append(r.Issues, Issue{SeverityWarning, "raster-not-cuttable", "cutting and engraving targets usually need paths, not raster image elements"})
+		}
+		if r.Meta.TextElements > 0 {
+			r.Issues = append(r.Issues, Issue{SeverityWarning, "text-not-outlined", "convert text to outlines/paths before sending to cutters or engravers"})
+		}
+		if r.Meta.Filters > 0 || r.Meta.Masks > 0 || r.Meta.ClipPaths > 0 {
+			r.Issues = append(r.Issues, Issue{SeverityWarning, "effects-may-not-output", "filters, masks, and clipping paths may not survive cutter/engraver workflows"})
+		}
+	}
+
+	switch material {
+	case MaterialFabric:
+		if r.Meta.Filters > 0 {
+			r.Issues = append(r.Issues, Issue{SeverityInfo, "fabric-effects", "soft effects such as filters may rasterize or separate poorly for fabric production"})
+		}
+	case MaterialBanner, MaterialSignage, MaterialVehicleWrap:
+		if r.Meta.RasterImages > 0 {
+			r.Issues = append(r.Issues, Issue{SeverityInfo, "large-format-raster", "verify embedded raster images at final viewing distance and production scale"})
+		}
+	case MaterialPackaging:
+		if r.Meta.ExternalRefs > 0 {
+			r.Issues = append(r.Issues, Issue{SeverityWarning, "packaging-external-reference", "package artwork should be self-contained for handoff and archiving"})
+		}
 	}
 }
 
@@ -174,6 +219,18 @@ func inspect(input []byte) (SVGMeta, error) {
 			}
 			if name == "image" {
 				meta.RasterImages++
+			}
+			if name == "text" {
+				meta.TextElements++
+			}
+			if name == "filter" {
+				meta.Filters++
+			}
+			if name == "mask" {
+				meta.Masks++
+			}
+			if name == "clippath" {
+				meta.ClipPaths++
 			}
 			for _, attr := range tok.Attr {
 				attrName := strings.ToLower(attr.Name.Local)

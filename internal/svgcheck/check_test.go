@@ -76,3 +76,48 @@ func TestParseTargets(t *testing.T) {
 		t.Fatalf("unexpected 8k width: %d", target.PixelsWide)
 	}
 }
+
+func TestParseMaterialTargets(t *testing.T) {
+	tests := map[string]MaterialTarget{
+		"screen":       MaterialScreen,
+		"web":          MaterialScreen,
+		"paper":        MaterialPaper,
+		"fabric":       MaterialFabric,
+		"vinyl":        MaterialVinyl,
+		"sticker":      MaterialVinyl,
+		"banner":       MaterialBanner,
+		"signage":      MaterialSignage,
+		"vehicle-wrap": MaterialVehicleWrap,
+		"packaging":    MaterialPackaging,
+		"laser":        MaterialLaser,
+		"cnc":          MaterialCNC,
+		"plotter":      MaterialPlotter,
+	}
+
+	for raw, want := range tests {
+		target, err := ParseTarget(raw)
+		if err != nil {
+			t.Fatalf("ParseTarget(%q) returned error: %v", raw, err)
+		}
+		if target.Material != want {
+			t.Fatalf("ParseTarget(%q) material = %q, want %q", raw, target.Material, want)
+		}
+	}
+}
+
+func TestVinylTargetFlagsNonCuttableContent(t *testing.T) {
+	report, err := Check([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><filter id="blur" /><image href="art.png" /><text>Hello</text></svg>`), "vinyl")
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+
+	codes := map[string]bool{}
+	for _, issue := range report.Issues {
+		codes[issue.Code] = true
+	}
+	for _, code := range []string{"raster-not-cuttable", "text-not-outlined", "effects-may-not-output"} {
+		if !codes[code] {
+			t.Fatalf("expected issue %q in %#v", code, report.Issues)
+		}
+	}
+}
