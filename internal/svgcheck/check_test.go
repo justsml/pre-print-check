@@ -1,6 +1,8 @@
 package svgcheck
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -30,6 +32,16 @@ func TestCheckAllowsBareSVGRoot(t *testing.T) {
 	}
 	if len(report.Issues) == 0 {
 		t.Fatal("expected missing metadata issues")
+	}
+}
+
+func TestNamespaceDoesNotCountAsExternalReference(t *testing.T) {
+	report, err := Check([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect /></svg>`), "")
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+	if hasIssueCode(report, "external-reference") {
+		t.Fatalf("did not expect external-reference for xmlns in %#v", report.Issues)
 	}
 }
 
@@ -143,6 +155,110 @@ func TestVinylTargetFlagsNonCuttableContent(t *testing.T) {
 	}
 }
 
+func TestPaperTargetFlagsPrintColorAndEffects(t *testing.T) {
+	report, err := Check([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+		<defs><filter id="shadow"><feDropShadow dx="1" dy="1" stdDeviation="2" /></filter></defs>
+		<rect fill="#ff0000" stroke="rgb(0, 128, 255)" filter="url(#shadow)" width="50" height="50" />
+	</svg>`), "paper")
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+
+	if !hasIssueCode(report, "rgb-colors-for-print") {
+		t.Fatalf("expected rgb-colors-for-print in %#v", report.Issues)
+	}
+	if !hasIssueCode(report, "print-effects-require-flattening") {
+		t.Fatalf("expected print-effects-require-flattening in %#v", report.Issues)
+	}
+	if !hasIssueCode(report, "shadow-effect") {
+		t.Fatalf("expected shadow-effect in %#v", report.Issues)
+	}
+	if !report.HasErrors() {
+		t.Fatal("expected print effects to be an error for paper output")
+	}
+}
+
+func TestInlineRasterAndColorCountAreRanked(t *testing.T) {
+	report, err := Check([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+		<image href="data:image/png;base64,AAA=" />
+		<rect fill="#111111" />
+		<rect fill="#222222" />
+	</svg>`), "")
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+
+	inlineRaster := issueByCode(report, "inline-raster-image")
+	if inlineRaster == nil {
+		t.Fatalf("expected inline-raster-image in %#v", report.Issues)
+	}
+	if inlineRaster.Rank != RankLow {
+		t.Fatalf("inline raster rank = %q, want %q", inlineRaster.Rank, RankLow)
+	}
+
+	colorCount := issueByCode(report, "color-count")
+	if colorCount == nil {
+		t.Fatalf("expected color-count in %#v", report.Issues)
+	}
+	if colorCount.Rank != RankLow {
+		t.Fatalf("color-count rank = %q, want %q", colorCount.Rank, RankLow)
+	}
+}
+
+func TestDownloadedFixtureCoverage(t *testing.T) {
+	tests := []struct {
+		name      string
+		target    string
+		wantCodes []string
+	}{
+		{
+			name:      "checkout-example-fp-clean.svg",
+			target:    "paper",
+			wantCodes: []string{"missing-viewbox", "color-count", "shadow-effect", "rgb-colors-for-print", "print-effects-require-flattening"},
+		},
+		{
+			name:      "url-comparison-chart.svg",
+			target:    "paper",
+			wantCodes: []string{"color-count", "rgb-colors-for-print"},
+		},
+		{
+			name:      "formatting-international-currency.svg",
+			target:    "paper",
+			wantCodes: []string{"color-count", "rgb-colors-for-print"},
+		},
+		{
+			name:      "docslurp-view-workspace.svg",
+			target:    "paper",
+			wantCodes: []string{"color-count", "rgb-colors-for-print"},
+		},
+		{
+			name:      "freepik-education-tech-logo-79211.svg",
+			target:    "paper",
+			wantCodes: []string{"color-count", "rgb-colors-for-print"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input, err := os.ReadFile(filepath.Join("testdata", tt.name))
+			if err != nil {
+				t.Fatalf("read fixture: %v", err)
+			}
+
+			report, err := Check(input, tt.target)
+			if err != nil {
+				t.Fatalf("Check returned error: %v", err)
+			}
+
+			for _, code := range tt.wantCodes {
+				if !hasIssueCode(report, code) {
+					t.Fatalf("expected issue %q in %#v", code, report.Issues)
+				}
+			}
+		})
+	}
+}
+
 func hasIssueCode(report Report, code string) bool {
 	for _, issue := range report.Issues {
 		if issue.Code == code {
@@ -150,6 +266,15 @@ func hasIssueCode(report Report, code string) bool {
 		}
 	}
 	return false
+}
+
+func issueByCode(report Report, code string) *Issue {
+	for i := range report.Issues {
+		if report.Issues[i].Code == code {
+			return &report.Issues[i]
+		}
+	}
+	return nil
 }
 
 func closeTo(got, want, tolerance float64) bool {
