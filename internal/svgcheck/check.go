@@ -53,7 +53,7 @@ type SVGMeta struct {
 func CheckFile(path string, rawTarget string) (Report, error) {
 	input, err := os.ReadFile(path)
 	if err != nil {
-		return Report{}, err
+		return Report{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	report, err := Check(input, rawTarget)
 	report.Path = path
@@ -95,25 +95,25 @@ func (r Report) Summary() string {
 
 func (r *Report) addCoreIssues() {
 	if !r.Meta.HasXMLNS {
-		r.Issues = append(r.Issues, Issue{SeverityWarning, "missing-xmlns", "root <svg> is missing xmlns=\"http://www.w3.org/2000/svg\""})
+		r.addIssue(SeverityWarning, "missing-xmlns", "root <svg> is missing xmlns=\"http://www.w3.org/2000/svg\"")
 	}
 	if r.Meta.ViewBox == "" {
-		r.Issues = append(r.Issues, Issue{SeverityWarning, "missing-viewbox", "root <svg> is missing a viewBox; scaling may be inconsistent"})
+		r.addIssue(SeverityWarning, "missing-viewbox", "root <svg> is missing a viewBox; scaling may be inconsistent")
 	}
 	if r.Meta.Width == "" || r.Meta.Height == "" {
-		r.Issues = append(r.Issues, Issue{SeverityInfo, "missing-size", "root <svg> does not declare both width and height"})
+		r.addIssue(SeverityInfo, "missing-size", "root <svg> does not declare both width and height")
 	}
 	if r.Meta.Scripts > 0 {
-		r.Issues = append(r.Issues, Issue{SeverityError, "script", "SVG contains script elements; unsafe for many print/web pipelines"})
+		r.addIssue(SeverityError, "script", "SVG contains script elements; unsafe for many print/web pipelines")
 	}
 	if r.Meta.EventAttrs > 0 {
-		r.Issues = append(r.Issues, Issue{SeverityError, "event-handler", "SVG contains inline event handler attributes"})
+		r.addIssue(SeverityError, "event-handler", "SVG contains inline event handler attributes")
 	}
 	if r.Meta.ExternalRefs > 0 {
-		r.Issues = append(r.Issues, Issue{SeverityWarning, "external-reference", "SVG references external resources that may not render offline or in print"})
+		r.addIssue(SeverityWarning, "external-reference", "SVG references external resources that may not render offline or in print")
 	}
 	if r.Meta.RasterImages > 0 {
-		r.Issues = append(r.Issues, Issue{SeverityWarning, "raster-image", "SVG embeds or references raster images; verify effective resolution for the final size"})
+		r.addIssue(SeverityWarning, "raster-image", "SVG embeds or references raster images; verify effective resolution for the final size")
 	}
 }
 
@@ -133,49 +133,57 @@ func (r *Report) addTargetIssues() {
 		ppi := r.Meta.WidthPixels / r.Target.WidthInches
 		switch {
 		case ppi < 72:
-			r.Issues = append(r.Issues, Issue{SeverityWarning, "low-effective-ppi", fmt.Sprintf("width implies about %.1f px/in at target size", ppi)})
+			r.addIssue(SeverityWarning, "low-effective-ppi", fmt.Sprintf("width implies about %.1f px/in at target size", ppi))
 		case ppi < 150:
-			r.Issues = append(r.Issues, Issue{SeverityInfo, "modest-effective-ppi", fmt.Sprintf("width implies about %.1f px/in at target size", ppi)})
+			r.addIssue(SeverityInfo, "modest-effective-ppi", fmt.Sprintf("width implies about %.1f px/in at target size", ppi))
 		}
 	}
 
 	if r.Target.PixelsWide > 0 && r.Meta.WidthPixels > float64(r.Target.PixelsWide)*1.5 {
-		r.Issues = append(r.Issues, Issue{SeverityInfo, "oversized-for-target", "SVG width is much larger than the target raster width"})
+		r.addIssue(SeverityInfo, "oversized-for-target", "SVG width is much larger than the target raster width")
 	}
 }
 
 func (r *Report) addMaterialIssues() {
 	material := r.Target.Material
 	if material.NeedsPhysicalSize() && r.Target.WidthInches == 0 {
-		r.Issues = append(r.Issues, Issue{SeverityInfo, "target-size-recommended", "provide a physical size target as well when checking effective raster resolution"})
+		r.addIssue(SeverityInfo, "target-size-recommended", "provide a physical size target as well when checking effective raster resolution")
 	}
 
 	if material.NeedsPureVectorGeometry() {
 		if r.Meta.RasterImages > 0 {
-			r.Issues = append(r.Issues, Issue{SeverityWarning, "raster-not-cuttable", "cutting and engraving targets usually need paths, not raster image elements"})
+			r.addIssue(SeverityWarning, "raster-not-cuttable", "cutting and engraving targets usually need paths, not raster image elements")
 		}
 		if r.Meta.TextElements > 0 {
-			r.Issues = append(r.Issues, Issue{SeverityWarning, "text-not-outlined", "convert text to outlines/paths before sending to cutters or engravers"})
+			r.addIssue(SeverityWarning, "text-not-outlined", "convert text to outlines/paths before sending to cutters or engravers")
 		}
 		if r.Meta.Filters > 0 || r.Meta.Masks > 0 || r.Meta.ClipPaths > 0 {
-			r.Issues = append(r.Issues, Issue{SeverityWarning, "effects-may-not-output", "filters, masks, and clipping paths may not survive cutter/engraver workflows"})
+			r.addIssue(SeverityWarning, "effects-may-not-output", "filters, masks, and clipping paths may not survive cutter/engraver workflows")
 		}
 	}
 
 	switch material {
 	case MaterialFabric:
 		if r.Meta.Filters > 0 {
-			r.Issues = append(r.Issues, Issue{SeverityInfo, "fabric-effects", "soft effects such as filters may rasterize or separate poorly for fabric production"})
+			r.addIssue(SeverityInfo, "fabric-effects", "soft effects such as filters may rasterize or separate poorly for fabric production")
 		}
 	case MaterialBanner, MaterialSignage, MaterialVehicleWrap:
 		if r.Meta.RasterImages > 0 {
-			r.Issues = append(r.Issues, Issue{SeverityInfo, "large-format-raster", "verify embedded raster images at final viewing distance and production scale"})
+			r.addIssue(SeverityInfo, "large-format-raster", "verify embedded raster images at final viewing distance and production scale")
 		}
 	case MaterialPackaging:
 		if r.Meta.ExternalRefs > 0 {
-			r.Issues = append(r.Issues, Issue{SeverityWarning, "packaging-external-reference", "package artwork should be self-contained for handoff and archiving"})
+			r.addIssue(SeverityWarning, "packaging-external-reference", "package artwork should be self-contained for handoff and archiving")
 		}
 	}
+}
+
+func (r *Report) addIssue(severity Severity, code, message string) {
+	r.Issues = append(r.Issues, Issue{
+		Severity: severity,
+		Code:     code,
+		Message:  message,
+	})
 }
 
 func inspect(input []byte) (SVGMeta, error) {
@@ -214,24 +222,21 @@ func inspect(input []byte) (SVGMeta, error) {
 				}
 			}
 
-			if name == "script" {
+			switch name {
+			case "script":
 				meta.Scripts++
-			}
-			if name == "image" {
+			case "image":
 				meta.RasterImages++
-			}
-			if name == "text" {
+			case "text":
 				meta.TextElements++
-			}
-			if name == "filter" {
+			case "filter":
 				meta.Filters++
-			}
-			if name == "mask" {
+			case "mask":
 				meta.Masks++
-			}
-			if name == "clippath" {
+			case "clippath":
 				meta.ClipPaths++
 			}
+
 			for _, attr := range tok.Attr {
 				attrName := strings.ToLower(attr.Name.Local)
 				if strings.HasPrefix(attrName, "on") {

@@ -5,7 +5,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
 )
 
@@ -132,14 +131,50 @@ func removeElementByName(input []byte, localName string) ([]byte, int) {
 	return out.Bytes(), removed
 }
 
-var eventAttrPattern = regexp.MustCompile(`(?i)\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*')`)
-
 func removeEventHandlerAttrs(input []byte) ([]byte, int) {
-	matches := eventAttrPattern.FindAllIndex(input, -1)
-	if len(matches) == 0 {
+	decoder := xml.NewDecoder(bytes.NewReader(input))
+	var out bytes.Buffer
+	encoder := xml.NewEncoder(&out)
+	removed := 0
+
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return input, 0
+		}
+
+		if start, ok := token.(xml.StartElement); ok {
+			attrs := start.Attr[:0]
+			for _, attr := range start.Attr {
+				if isEventHandlerAttr(attr) {
+					removed++
+					continue
+				}
+				attrs = append(attrs, attr)
+			}
+			start.Attr = attrs
+			token = start
+		}
+
+		if err := encoder.EncodeToken(token); err != nil {
+			return input, 0
+		}
+	}
+
+	if removed == 0 {
 		return input, 0
 	}
-	return eventAttrPattern.ReplaceAll(input, nil), len(matches)
+	if err := encoder.Flush(); err != nil {
+		return input, 0
+	}
+	return out.Bytes(), removed
+}
+
+func isEventHandlerAttr(attr xml.Attr) bool {
+	return attr.Name.Space == "" && strings.HasPrefix(strings.ToLower(attr.Name.Local), "on")
 }
 
 func trimFloat(v float64) string {

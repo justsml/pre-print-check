@@ -1,6 +1,7 @@
 package svgcheck
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -14,8 +15,11 @@ func TestCheckFlagsUnsafeSVG(t *testing.T) {
 	if !report.HasErrors() {
 		t.Fatal("expected unsafe SVG to have errors")
 	}
-	if len(report.Issues) < 4 {
-		t.Fatalf("expected several issues, got %#v", report.Issues)
+
+	for _, code := range []string{"missing-xmlns", "missing-viewbox", "script", "event-handler", "low-effective-ppi"} {
+		if !hasIssueCode(report, code) {
+			t.Fatalf("expected issue %q in %#v", code, report.Issues)
+		}
 	}
 }
 
@@ -45,7 +49,7 @@ func TestFixAddsSafeRootAttributes(t *testing.T) {
 }
 
 func TestUnsafeFixRemovesScriptAndEventHandlers(t *testing.T) {
-	result, err := Fix([]byte(`<svg width="100" height="50"><script>alert(1)</script><rect onclick="x()" /></svg>`), FixOptions{Unsafe: true})
+	result, err := Fix([]byte(`<svg width="100" height="50"><script>alert(1)</script><rect onclick="x()" onload='y()' /></svg>`), FixOptions{Unsafe: true})
 	if err != nil {
 		t.Fatalf("Fix returned error: %v", err)
 	}
@@ -57,23 +61,42 @@ func TestUnsafeFixRemovesScriptAndEventHandlers(t *testing.T) {
 	if strings.Contains(got, "onclick") {
 		t.Fatalf("expected event handler removal, got %s", got)
 	}
+	if strings.Contains(got, "onload") {
+		t.Fatalf("expected single-quoted event handler removal, got %s", got)
+	}
+
+	if !slices.Contains(result.Changes, "removed 1 script element(s)") {
+		t.Fatalf("expected script removal change, got %#v", result.Changes)
+	}
+	if !slices.Contains(result.Changes, "removed 2 event handler attribute(s)") {
+		t.Fatalf("expected event handler removal change, got %#v", result.Changes)
+	}
 }
 
 func TestParseTargets(t *testing.T) {
-	target, err := ParseTarget("1.2m")
-	if err != nil {
-		t.Fatalf("ParseTarget returned error: %v", err)
-	}
-	if target.WidthInches < 47.2 || target.WidthInches > 47.3 {
-		t.Fatalf("unexpected inches: %f", target.WidthInches)
+	tests := []struct {
+		name       string
+		raw        string
+		wantInches float64
+		wantWidth  int
+	}{
+		{name: "meters", raw: "1.2m", wantInches: 47.24409448824},
+		{name: "8k", raw: "8k", wantWidth: 7680},
 	}
 
-	target, err = ParseTarget("8k")
-	if err != nil {
-		t.Fatalf("ParseTarget returned error: %v", err)
-	}
-	if target.PixelsWide != 7680 {
-		t.Fatalf("unexpected 8k width: %d", target.PixelsWide)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target, err := ParseTarget(tt.raw)
+			if err != nil {
+				t.Fatalf("ParseTarget(%q) returned error: %v", tt.raw, err)
+			}
+			if tt.wantInches > 0 && !closeTo(target.WidthInches, tt.wantInches, 0.001) {
+				t.Fatalf("WidthInches = %f, want %f", target.WidthInches, tt.wantInches)
+			}
+			if target.PixelsWide != tt.wantWidth {
+				t.Fatalf("PixelsWide = %d, want %d", target.PixelsWide, tt.wantWidth)
+			}
+		})
 	}
 }
 
@@ -95,13 +118,15 @@ func TestParseMaterialTargets(t *testing.T) {
 	}
 
 	for raw, want := range tests {
-		target, err := ParseTarget(raw)
-		if err != nil {
-			t.Fatalf("ParseTarget(%q) returned error: %v", raw, err)
-		}
-		if target.Material != want {
-			t.Fatalf("ParseTarget(%q) material = %q, want %q", raw, target.Material, want)
-		}
+		t.Run(raw, func(t *testing.T) {
+			target, err := ParseTarget(raw)
+			if err != nil {
+				t.Fatalf("ParseTarget(%q) returned error: %v", raw, err)
+			}
+			if target.Material != want {
+				t.Fatalf("ParseTarget(%q) material = %q, want %q", raw, target.Material, want)
+			}
+		})
 	}
 }
 
@@ -111,13 +136,26 @@ func TestVinylTargetFlagsNonCuttableContent(t *testing.T) {
 		t.Fatalf("Check returned error: %v", err)
 	}
 
-	codes := map[string]bool{}
-	for _, issue := range report.Issues {
-		codes[issue.Code] = true
-	}
 	for _, code := range []string{"raster-not-cuttable", "text-not-outlined", "effects-may-not-output"} {
-		if !codes[code] {
+		if !hasIssueCode(report, code) {
 			t.Fatalf("expected issue %q in %#v", code, report.Issues)
 		}
 	}
+}
+
+func hasIssueCode(report Report, code string) bool {
+	for _, issue := range report.Issues {
+		if issue.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+func closeTo(got, want, tolerance float64) bool {
+	diff := got - want
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= tolerance
 }
