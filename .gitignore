@@ -1,0 +1,5 @@
+pre-print-tools
+*.test
+coverage.out
+dist/
+tmp/
