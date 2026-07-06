@@ -19,6 +19,16 @@ func TestCheckFlagsUnsafeSVG(t *testing.T) {
 	}
 }
 
+func TestCheckAllowsBareSVGRoot(t *testing.T) {
+	report, err := Check([]byte(`<svg><rect /></svg>`), "")
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+	if len(report.Issues) == 0 {
+		t.Fatal("expected missing metadata issues")
+	}
+}
+
 func TestFixAddsSafeRootAttributes(t *testing.T) {
 	result, err := Fix([]byte(`<svg width="100" height="50"><rect /></svg>`), FixOptions{})
 	if err != nil {

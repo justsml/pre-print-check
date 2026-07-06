@@ -33,6 +33,7 @@ type Report struct {
 }
 
 type SVGMeta struct {
+	FoundSVG     bool
 	Width        string
 	Height       string
 	WidthPixels  float64
@@ -148,7 +149,8 @@ func inspect(input []byte) (SVGMeta, error) {
 		switch tok := token.(type) {
 		case xml.StartElement:
 			name := strings.ToLower(tok.Name.Local)
-			if name == "svg" && meta.Width == "" && meta.Height == "" && meta.ViewBox == "" {
+			if name == "svg" && !meta.FoundSVG {
+				meta.FoundSVG = true
 				for _, attr := range tok.Attr {
 					switch attr.Name.Local {
 					case "width":
@@ -185,7 +187,7 @@ func inspect(input []byte) (SVGMeta, error) {
 		}
 	}
 
-	if meta.Width == "" && meta.Height == "" && meta.ViewBox == "" {
+	if !meta.FoundSVG {
 		return meta, fmt.Errorf("no root <svg> element found")
 	}
 	return meta, nil
