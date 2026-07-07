@@ -43,31 +43,49 @@ type Report struct {
 }
 
 type SVGMeta struct {
-	FoundSVG           bool
-	Width              string
-	Height             string
-	WidthPixels        float64
-	HeightPixels       float64
-	ViewBox            string
-	HasXMLNS           bool
-	Scripts            int
-	EventAttrs         int
-	ExternalRefs       int
-	RasterImages       int
-	InlineRasterImages int
-	TextElements       int
-	Filters            int
-	FilterRefs         int
-	Shadows            int
-	Masks              int
-	ClipPaths          int
-	Opacity            int
-	BlendModes         int
-	ThinStrokes        int
-	NearDisconnected   int
-	ColorValues        int
-	UniqueColors       int
-	CMYKColors         int
+	FoundSVG               bool
+	Width                  string
+	Height                 string
+	WidthPixels            float64
+	HeightPixels           float64
+	ViewBox                string
+	HasXMLNS               bool
+	Scripts                int
+	EventAttrs             int
+	ExternalRefs           int
+	RasterImages           int
+	InlineRasterImages     int
+	TextElements           int
+	Filters                int
+	FilterRefs             int
+	Shadows                int
+	Masks                  int
+	ClipPaths              int
+	Opacity                int
+	BlendModes             int
+	ThinStrokes            int
+	ThinStrokeSummaries    []StrokeWidthSummary
+	NearDisconnected       int
+	TextShapeOverlaps      []TextShapeOverlap
+	SmallShapesSub1MM      int
+	SmallShapesSub2MM      int
+	SubtleEffects          int
+	LargeShadows           int
+	BackgroundTransparency int
+	ColorValues            int
+	UniqueColors           int
+	CMYKColors             int
+}
+
+type StrokeWidthSummary struct {
+	Width string
+	Count int
+}
+
+type TextShapeOverlap struct {
+	Text       string
+	ShapeType  string
+	ShapeCount int
 }
 
 type issueProfile struct {
@@ -105,6 +123,7 @@ func Check(input []byte, rawTarget string) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
+	enrichProductionDetails(input, target, &meta)
 
 	report := Report{Target: target, Meta: meta}
 	profile := issueProfileForTarget(target)
@@ -197,10 +216,21 @@ func (r *Report) addTargetIssues() {
 
 	profile := issueProfileForTarget(r.Target)
 	if r.Meta.ThinStrokes > 0 && profile.ReviewThinStrokes {
-		r.addRankedIssue(SeverityWarning, "thin-stroke", "SVG contains very thin strokes that may disappear, break up, or image unpredictably in print production", RankModerate)
+		r.addRankedIssue(SeverityWarning, "thin-stroke", thinStrokeMessage(r.Meta, r.Target), RankModerate)
 	}
 	if r.Meta.NearDisconnected > 0 && profile.ReviewDisconnectedJoins {
 		r.addRankedIssue(SeverityWarning, "near-disconnected-lines", "SVG has stroked open line/path endpoints that visually read as connected but are not joined; use a polygon/closed path or join the nodes to avoid visible gaps or awkward overlaps at production scale", rankNearDisconnected(r.Meta.NearDisconnected))
+	}
+	if len(r.Meta.TextShapeOverlaps) > 0 && profile.ReviewArtworkComplexity {
+		for _, overlap := range r.Meta.TextShapeOverlaps {
+			r.addRankedIssue(SeverityWarning, "text-overlap-shapes", textOverlapMessage(overlap, r.Meta), RankModerate)
+		}
+	}
+	if (r.Meta.SmallShapesSub1MM > 0 || r.Meta.SmallShapesSub2MM > 0) && profile.ReviewArtworkComplexity {
+		r.addRankedIssue(SeverityWarning, "small-detail-durability", smallDetailMessage(r.Meta, r.Target), rankSmallDetails(r.Meta.SmallShapesSub1MM, r.Meta.SmallShapesSub2MM))
+	}
+	if r.Meta.BackgroundTransparency > 0 && (profile.RequirePrintColors || r.Target.WidthInches > 0) {
+		r.addRankedIssue(SeverityWarning, "background-transparency", fmt.Sprintf("%s detected; flatten against the intended substrate or add an explicit opaque background before production proofing", plural(r.Meta.BackgroundTransparency, "background transparency issue", "background transparency issues")), RankModerate)
 	}
 
 	if r.Target.Material != "" {
@@ -228,7 +258,7 @@ func (r *Report) addTargetIssues() {
 func (r *Report) addMaterialIssues(profile issueProfile) {
 	material := r.Target.Material
 	if material.NeedsPhysicalSize() && r.Target.WidthInches == 0 {
-		r.addIssue(SeverityInfo, "target-size-recommended", "provide a physical size target as well when checking effective raster resolution")
+		r.addIssue(SeverityInfo, "target-size-recommended", "no physical size was provided; assuming S/M/L production outputs at 3in, 8in, and 14in wide for size-sensitive checks")
 	}
 
 	if profile.RequirePureVectorGeometry {
@@ -254,14 +284,14 @@ func (r *Report) addMaterialIssues(profile issueProfile) {
 
 	if profile.RequireFlattenedEffects {
 		if r.Meta.Filters > 0 || r.Meta.FilterRefs > 0 || r.Meta.BlendModes > 0 {
-			r.addRankedIssue(SeverityError, "print-effects-require-flattening", "filters, filter references, and blend modes should be flattened or proofed in a press-ready PDF workflow", RankHigh)
+			r.addRankedIssue(SeverityError, "print-effects-require-flattening", effectFlatteningMessage(r.Meta), RankHigh)
 		}
 	}
 
 	switch material {
 	case MaterialFabric:
 		if r.Meta.Filters > 0 {
-			r.addRankedIssue(SeverityWarning, "fabric-effects", "soft effects such as filters may rasterize or separate poorly for fabric production", RankModerate)
+			r.addRankedIssue(SeverityWarning, "fabric-effects", effectFlatteningMessage(r.Meta), RankModerate)
 		}
 		if r.Meta.ColorValues > 0 && r.Meta.UniqueColors > 24 && profile.ReviewFabricColorCount {
 			r.addRankedIssue(SeverityWarning, "many-fabric-colors", "many color values can increase setup complexity for screen print, embroidery, vinyl, or spot-color textile workflows", rankColorCount(r.Meta.UniqueColors))
@@ -271,7 +301,7 @@ func (r *Report) addMaterialIssues(profile issueProfile) {
 			r.addRankedIssue(SeverityInfo, "large-format-raster", "verify embedded raster images at final viewing distance and production scale", rankRasterImages(r.Meta.RasterImages))
 		}
 		if r.Meta.Filters > 0 || r.Meta.FilterRefs > 0 {
-			r.addRankedIssue(SeverityWarning, "large-format-effects", "filters and shadows may be rasterized by the RIP; proof them at production scale", RankModerate)
+			r.addRankedIssue(SeverityWarning, "large-format-effects", effectFlatteningMessage(r.Meta), RankModerate)
 		}
 	}
 
@@ -450,6 +480,484 @@ func inspect(input []byte) (SVGMeta, error) {
 	meta.UniqueColors = len(colorSetFrom(input))
 	meta.NearDisconnected = countNearDisconnectedEndpoints(endpoints)
 	return meta, nil
+}
+
+type roughShape struct {
+	kind string
+	box  box
+}
+
+type roughText struct {
+	text string
+	box  box
+}
+
+type box struct {
+	x1, y1, x2, y2 float64
+}
+
+func enrichProductionDetails(input []byte, target Target, meta *SVGMeta) {
+	decoder := xml.NewDecoder(bytes.NewReader(input))
+	styleStack := []geometryStyle{defaultGeometryStyle()}
+	var shapes []roughShape
+	var polygons []roughShape
+	var texts []roughText
+	thinCounts := map[string]int{}
+	currentText := (*textCapture)(nil)
+	mmPerUnit := physicalMMPerSVGUnit(*meta, target)
+
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return
+		}
+
+		switch tok := token.(type) {
+		case xml.StartElement:
+			name := strings.ToLower(tok.Name.Local)
+			style := inheritedGeometryStyle(styleStack[len(styleStack)-1], tok.Attr)
+			styleStack = append(styleStack, style)
+			attr := attrsByName(tok.Attr)
+
+			if isOverlayGeometryElement(name) && style.hasVisibleStroke() && strokeWidthLooksProductionThin(style.strokeWidth) {
+				thinCounts[strokeWidthLabel(tok.Attr, style)]++
+			}
+
+			if b, ok := roughBBox(name, attr); ok {
+				shapes = append(shapes, roughShape{kind: name, box: b})
+				if name == "polygon" {
+					polygons = append(polygons, roughShape{kind: name, box: b})
+				}
+				if mmPerUnit > 0 {
+					maxMM := math.Max(b.width(), b.height()) * mmPerUnit
+					if maxMM > 0 && maxMM < 1 {
+						meta.SmallShapesSub1MM++
+					}
+					if maxMM > 0 && maxMM < 2 {
+						meta.SmallShapesSub2MM++
+					}
+				}
+			}
+
+			if name == "text" {
+				currentText = newTextCapture(attr, style)
+			}
+			if name == "fedropshadow" && largeShadowElement(attr) {
+				meta.LargeShadows++
+			}
+			if backgroundTransparencyElement(name, attr, *meta) {
+				meta.BackgroundTransparency++
+			}
+		case xml.CharData:
+			if currentText != nil {
+				currentText.text.WriteString(string(tok))
+			}
+		case xml.EndElement:
+			name := strings.ToLower(tok.Name.Local)
+			if name == "text" && currentText != nil {
+				if text, ok := currentText.toRoughText(); ok {
+					texts = append(texts, text)
+				}
+				currentText = nil
+			}
+			if len(styleStack) > 1 {
+				styleStack = styleStack[:len(styleStack)-1]
+			}
+		}
+	}
+
+	meta.ThinStrokeSummaries = strokeSummaries(thinCounts)
+	if len(meta.ThinStrokeSummaries) > 0 {
+		meta.ThinStrokes = 0
+		for _, summary := range meta.ThinStrokeSummaries {
+			meta.ThinStrokes += summary.Count
+		}
+	}
+	meta.TextShapeOverlaps = textPolygonOverlaps(texts, polygons)
+	meta.SubtleEffects = subtleEffectCount(*meta)
+}
+
+type textCapture struct {
+	x, y     float64
+	fontSize float64
+	text     strings.Builder
+}
+
+func newTextCapture(attr map[string]string, style geometryStyle) *textCapture {
+	x, okX := parseCoordinate(defaultString(attr["x"], "0"))
+	y, okY := parseCoordinate(defaultString(attr["y"], "0"))
+	if !okX || !okY {
+		return nil
+	}
+	fontSize := parseFontSize(attr["font-size"], attr["style"])
+	if fontSize <= 0 {
+		fontSize = 16
+	}
+	_ = style
+	return &textCapture{x: x, y: y, fontSize: fontSize}
+}
+
+func (t *textCapture) toRoughText() (roughText, bool) {
+	content := strings.TrimSpace(t.text.String())
+	if content == "" {
+		return roughText{}, false
+	}
+	width := float64(len([]rune(content))) * t.fontSize * 0.55
+	return roughText{
+		text: content,
+		box:  box{x1: t.x, y1: t.y - t.fontSize, x2: t.x + width, y2: t.y + t.fontSize*0.25},
+	}, true
+}
+
+func roughBBox(name string, attr map[string]string) (box, bool) {
+	switch name {
+	case "rect":
+		x, _ := parseCoordinate(defaultString(attr["x"], "0"))
+		y, _ := parseCoordinate(defaultString(attr["y"], "0"))
+		w, okW := parseCoordinate(attr["width"])
+		h, okH := parseCoordinate(attr["height"])
+		if okW && okH && w > 0 && h > 0 {
+			return box{x1: x, y1: y, x2: x + w, y2: y + h}, true
+		}
+	case "circle":
+		cx, okX := parseCoordinate(attr["cx"])
+		cy, okY := parseCoordinate(attr["cy"])
+		r, okR := parseCoordinate(attr["r"])
+		if okX && okY && okR && r > 0 {
+			return box{x1: cx - r, y1: cy - r, x2: cx + r, y2: cy + r}, true
+		}
+	case "ellipse":
+		cx, okX := parseCoordinate(attr["cx"])
+		cy, okY := parseCoordinate(attr["cy"])
+		rx, okRX := parseCoordinate(attr["rx"])
+		ry, okRY := parseCoordinate(attr["ry"])
+		if okX && okY && okRX && okRY && rx > 0 && ry > 0 {
+			return box{x1: cx - rx, y1: cy - ry, x2: cx + rx, y2: cy + ry}, true
+		}
+	case "line":
+		x1, ok1 := parseCoordinate(attr["x1"])
+		y1, ok2 := parseCoordinate(attr["y1"])
+		x2, ok3 := parseCoordinate(attr["x2"])
+		y2, ok4 := parseCoordinate(attr["y2"])
+		if ok1 && ok2 && ok3 && ok4 {
+			return boxFromPoints([]geometryEndpoint{{x: x1, y: y1}, {x: x2, y: y2}}), true
+		}
+	case "polygon", "polyline":
+		points := pointsFromNumberList(attr["points"])
+		if len(points) > 0 {
+			return boxFromPoints(points), true
+		}
+	case "path":
+		points := roughPathPoints(attr["d"])
+		if len(points) > 0 {
+			return boxFromPoints(points), true
+		}
+	}
+	return box{}, false
+}
+
+func pointsFromNumberList(value string) []geometryEndpoint {
+	values := pathNumberPattern.FindAllString(value, -1)
+	if len(values) < 2 {
+		return nil
+	}
+	points := make([]geometryEndpoint, 0, len(values)/2)
+	for i := 0; i+1 < len(values); i += 2 {
+		x, y, ok := parsePathPair(values[i], values[i+1])
+		if ok {
+			points = append(points, geometryEndpoint{x: x, y: y})
+		}
+	}
+	return points
+}
+
+func roughPathPoints(value string) []geometryEndpoint {
+	values := pathNumberPattern.FindAllString(value, -1)
+	if len(values) < 2 {
+		return nil
+	}
+	points := make([]geometryEndpoint, 0, len(values)/2)
+	for i := 0; i+1 < len(values); i += 2 {
+		x, y, ok := parsePathPair(values[i], values[i+1])
+		if ok {
+			points = append(points, geometryEndpoint{x: x, y: y})
+		}
+	}
+	return points
+}
+
+func boxFromPoints(points []geometryEndpoint) box {
+	b := box{x1: points[0].x, y1: points[0].y, x2: points[0].x, y2: points[0].y}
+	for _, point := range points[1:] {
+		b.x1 = math.Min(b.x1, point.x)
+		b.y1 = math.Min(b.y1, point.y)
+		b.x2 = math.Max(b.x2, point.x)
+		b.y2 = math.Max(b.y2, point.y)
+	}
+	return b
+}
+
+func (b box) width() float64  { return math.Abs(b.x2 - b.x1) }
+func (b box) height() float64 { return math.Abs(b.y2 - b.y1) }
+
+func boxesOverlap(a, b box) bool {
+	return a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1
+}
+
+func textPolygonOverlaps(texts []roughText, polygons []roughShape) []TextShapeOverlap {
+	var overlaps []TextShapeOverlap
+	for _, text := range texts {
+		count := 0
+		for _, polygon := range polygons {
+			if boxesOverlap(text.box, polygon.box) {
+				count++
+			}
+		}
+		if count > 0 {
+			overlaps = append(overlaps, TextShapeOverlap{
+				Text:       truncateText(text.text, 48),
+				ShapeType:  "polygon",
+				ShapeCount: count,
+			})
+		}
+	}
+	return overlaps
+}
+
+func physicalMMPerSVGUnit(meta SVGMeta, target Target) float64 {
+	if meta.WidthPixels <= 0 {
+		return 0
+	}
+	if widths := target.PhysicalWidthsInches(); len(widths) > 0 {
+		return smallestFloat(widths) * 25.4 / meta.WidthPixels
+	}
+	if inches := parseSVGLengthInches(meta.Width); inches > 0 {
+		return inches * 25.4 / meta.WidthPixels
+	}
+	return 0
+}
+
+func parseSVGLengthInches(value string) float64 {
+	matches := lengthPattern.FindStringSubmatch(value)
+	if matches == nil {
+		return 0
+	}
+	n, err := strconv.ParseFloat(matches[1], 64)
+	if err != nil {
+		return 0
+	}
+	switch strings.ToLower(matches[2]) {
+	case "in":
+		return n
+	case "ft":
+		return n * 12
+	case "cm":
+		return n / 2.54
+	case "mm":
+		return n / 25.4
+	case "pt":
+		return n / 72
+	case "pc":
+		return n / 6
+	default:
+		return 0
+	}
+}
+
+func parseFontSize(attrValue, style string) float64 {
+	if attrValue == "" {
+		attrValue = styleValue(style, "font-size")
+	}
+	return parseSVGLengthPixels(attrValue)
+}
+
+func strokeWidthLooksProductionThin(width float64) bool {
+	return width > 0 && width <= 1.5
+}
+
+func strokeWidthLabel(attrs []xml.Attr, style geometryStyle) string {
+	attr := attrsByName(attrs)
+	if value := attr["stroke-width"]; value != "" {
+		return value
+	}
+	if value := styleValue(attr["style"], "stroke-width"); value != "" {
+		return value
+	}
+	return fmt.Sprintf("%s px", trimFloat(style.strokeWidth))
+}
+
+func strokeSummaries(counts map[string]int) []StrokeWidthSummary {
+	summaries := make([]StrokeWidthSummary, 0, len(counts))
+	for width, count := range counts {
+		summaries = append(summaries, StrokeWidthSummary{Width: width, Count: count})
+	}
+	return summaries
+}
+
+func thinStrokeMessage(meta SVGMeta, target Target) string {
+	if len(meta.ThinStrokeSummaries) > 0 {
+		primary := meta.ThinStrokeSummaries[0]
+		return fmt.Sprintf("There are %s with %s stroke width, which may not scale cleanly%s; consider thickening strokes, outlining them, or simplifying hairline detail for the production method", plural(primary.Count, "stroked line/path element", "stroked line/path elements"), primary.Width, targetPhrase(target))
+	}
+	return fmt.Sprintf("There are %s, which may disappear, break up, or image unpredictably%s; consider thickening strokes or converting critical strokes to outlined shapes", plural(meta.ThinStrokes, "very thin stroked element", "very thin stroked elements"), targetPhrase(target))
+}
+
+func targetPhrase(target Target) string {
+	if target.WidthInches > 0 && target.Material != "" {
+		return fmt.Sprintf(" at %.1fin on %s", target.WidthInches, target.Material)
+	}
+	if target.WidthInches > 0 {
+		return fmt.Sprintf(" at %.1fin wide", target.WidthInches)
+	}
+	if target.Material != "" {
+		if widths := target.PhysicalWidthsInches(); len(widths) > 0 {
+			return fmt.Sprintf(" across assumed S/M/L outputs (%s, %s, and %s wide) on %s", trimFloat(widths[0])+"in", trimFloat(widths[1])+"in", trimFloat(widths[2])+"in", target.Material)
+		}
+		return fmt.Sprintf(" on %s", target.Material)
+	}
+	return ""
+}
+
+func textOverlapMessage(overlap TextShapeOverlap, meta SVGMeta) string {
+	tonePhrase := "limited-color"
+	if meta.UniqueColors > 0 && meta.UniqueColors <= 3 {
+		tonePhrase = fmt.Sprintf("%d-tone", meta.UniqueColors)
+	}
+	return fmt.Sprintf("The text %q overlaps %s; it may not stay clear in %s printing. Add knockout/outline contrast, move the text, or merge the interaction intentionally in the production artwork", overlap.Text, plural(overlap.ShapeCount, overlap.ShapeType, overlap.ShapeType+"s"), tonePhrase)
+}
+
+func smallDetailMessage(meta SVGMeta, target Target) string {
+	return fmt.Sprintf("Durability: design features many small elements: %s and %s%s. Such precise transfers can limit material choices; simplify tiny islands, enlarge detail, or choose a production method/material that can hold fine features", plural(meta.SmallShapesSub1MM, "sub-1mm shape", "sub-1mm shapes"), plural(meta.SmallShapesSub2MM, "sub-2mm shape", "sub-2mm shapes"), targetPhrase(target))
+}
+
+func rankSmallDetails(sub1MM, sub2MM int) FindingRank {
+	switch {
+	case sub1MM >= 50 || sub2MM >= 300:
+		return RankHigh
+	case sub1MM >= 10 || sub2MM >= 75:
+		return RankModerate
+	default:
+		return RankLow
+	}
+}
+
+func effectFlatteningMessage(meta SVGMeta) string {
+	subtle := meta.SubtleEffects
+	if subtle == 0 {
+		subtle = meta.Filters + meta.FilterRefs + meta.BlendModes + meta.Masks + meta.ClipPaths
+	}
+	largeShadow := meta.LargeShadows
+	if largeShadow == 0 && meta.Shadows > 0 {
+		largeShadow = 1
+	}
+	return fmt.Sprintf("%s and %s may degrade unevenly or require flattening, spot-white/underbase planning, or print methods/materials that support soft gradients and transparency", plural(subtle, "subtle effect", "subtle effects"), plural(largeShadow, "large shadow", "large shadows"))
+}
+
+func subtleEffectCount(meta SVGMeta) int {
+	count := meta.Filters + meta.FilterRefs + meta.BlendModes + meta.Masks + meta.ClipPaths
+	if count > meta.LargeShadows {
+		return count - meta.LargeShadows
+	}
+	return count
+}
+
+func largeShadowElement(attr map[string]string) bool {
+	stdDeviation := firstFloat(attr["stddeviation"])
+	dx := math.Abs(firstFloat(attr["dx"]))
+	dy := math.Abs(firstFloat(attr["dy"]))
+	return stdDeviation >= 2 || dx >= 3 || dy >= 3
+}
+
+func firstFloat(value string) float64 {
+	values := pathNumberPattern.FindAllString(value, -1)
+	if len(values) == 0 {
+		return 0
+	}
+	n, _ := strconv.ParseFloat(values[0], 64)
+	return n
+}
+
+func backgroundTransparencyElement(name string, attr map[string]string, meta SVGMeta) bool {
+	if name != "rect" {
+		return false
+	}
+	x, _ := parseCoordinate(defaultString(attr["x"], "0"))
+	y, _ := parseCoordinate(defaultString(attr["y"], "0"))
+	w, okW := parseCoordinate(attr["width"])
+	h, okH := parseCoordinate(attr["height"])
+	if !okW || !okH || x != 0 || y != 0 {
+		return false
+	}
+	if meta.WidthPixels > 0 && w < meta.WidthPixels*0.9 {
+		return false
+	}
+	if meta.HeightPixels > 0 && h < meta.HeightPixels*0.9 {
+		return false
+	}
+	return opacityValue(attr["opacity"]) < 1 || opacityValue(attr["fill-opacity"]) < 1 || rgbaAlphaLessThanOne(attr["fill"])
+}
+
+func opacityValue(value string) float64 {
+	if value == "" {
+		return 1
+	}
+	value = strings.TrimSpace(value)
+	if strings.HasSuffix(value, "%") {
+		n, err := strconv.ParseFloat(strings.TrimSuffix(value, "%"), 64)
+		if err != nil {
+			return 1
+		}
+		return n / 100
+	}
+	n, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 1
+	}
+	return n
+}
+
+func rgbaAlphaLessThanOne(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	if !strings.HasPrefix(lower, "rgba(") {
+		return false
+	}
+	values := pathNumberPattern.FindAllString(lower, -1)
+	if len(values) < 4 {
+		return false
+	}
+	alpha, err := strconv.ParseFloat(values[3], 64)
+	return err == nil && alpha < 1
+}
+
+func truncateText(value string, maxRunes int) string {
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return string(runes[:maxRunes-1]) + "..."
+}
+
+func plural(count int, singular, plural string) string {
+	if count == 1 {
+		return fmt.Sprintf("1 %s", singular)
+	}
+	return fmt.Sprintf("%d %s", count, plural)
+}
+
+func smallestFloat(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	smallest := values[0]
+	for _, value := range values[1:] {
+		if value < smallest {
+			smallest = value
+		}
+	}
+	return smallest
 }
 
 var lengthPattern = regexp.MustCompile(`^\s*([0-9]*\.?[0-9]+)\s*([a-zA-Z%]*)\s*$`)

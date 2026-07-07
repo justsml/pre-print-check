@@ -41,6 +41,15 @@ func ParseTarget(raw string) (Target, error) {
 	}
 
 	lower := strings.ToLower(t.Raw)
+	if material, size, ok := splitMaterialSizeTarget(lower); ok {
+		materialTarget, materialOK := parseMaterialTarget(material)
+		sizeTarget, sizeErr := ParseTarget(size)
+		if materialOK && sizeErr == nil && sizeTarget.WidthInches > 0 {
+			t.Material = materialTarget
+			t.WidthInches = sizeTarget.WidthInches
+			return t, nil
+		}
+	}
 	switch lower {
 	case "4k":
 		t.PixelsWide = 3840
@@ -83,9 +92,31 @@ func ParseTarget(raw string) (Target, error) {
 	return t, nil
 }
 
+func splitMaterialSizeTarget(raw string) (material, size string, ok bool) {
+	for _, sep := range []string{"@", ":"} {
+		parts := strings.SplitN(raw, sep, 2)
+		if len(parts) == 2 {
+			return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), true
+		}
+	}
+	fields := strings.Fields(raw)
+	if len(fields) == 2 {
+		if _, ok := parseMaterialTarget(fields[0]); ok {
+			return fields[0], fields[1], true
+		}
+		if _, ok := parseMaterialTarget(fields[1]); ok {
+			return fields[1], fields[0], true
+		}
+	}
+	return "", "", false
+}
+
 func (t Target) Description() string {
 	if t.Material != "" {
-		return fmt.Sprintf("%s (%s)", t.Raw, t.Material.Description())
+		if t.WidthInches > 0 {
+			return fmt.Sprintf("%s (%s, %.2f in wide)", t.Raw, t.Material.Description(), t.WidthInches)
+		}
+		return fmt.Sprintf("%s (%s, assuming S/M/L outputs)", t.Raw, t.Material.Description())
 	}
 	if t.PixelsWide > 0 {
 		return fmt.Sprintf("%s (%dx%d px)", t.Raw, t.PixelsWide, t.PixelsHigh)
@@ -94,6 +125,16 @@ func (t Target) Description() string {
 		return fmt.Sprintf("%s (%.2f in wide)", t.Raw, t.WidthInches)
 	}
 	return t.Raw
+}
+
+func (t Target) PhysicalWidthsInches() []float64 {
+	if t.WidthInches > 0 {
+		return []float64{t.WidthInches}
+	}
+	if t.Material.NeedsPhysicalSize() {
+		return []float64{3, 8, 14}
+	}
+	return nil
 }
 
 func parseMaterialTarget(raw string) (MaterialTarget, bool) {

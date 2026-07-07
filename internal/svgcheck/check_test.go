@@ -1,6 +1,7 @@
 package svgcheck
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -87,13 +88,15 @@ func TestUnsafeFixRemovesScriptAndEventHandlers(t *testing.T) {
 
 func TestParseTargets(t *testing.T) {
 	tests := []struct {
-		name       string
-		raw        string
-		wantInches float64
-		wantWidth  int
+		name         string
+		raw          string
+		wantInches   float64
+		wantWidth    int
+		wantMaterial MaterialTarget
 	}{
 		{name: "meters", raw: "1.2m", wantInches: 47.24409448824},
 		{name: "8k", raw: "8k", wantWidth: 7680},
+		{name: "material with size", raw: "fabric@14in", wantInches: 14, wantMaterial: MaterialFabric},
 	}
 
 	for _, tt := range tests {
@@ -107,6 +110,9 @@ func TestParseTargets(t *testing.T) {
 			}
 			if target.PixelsWide != tt.wantWidth {
 				t.Fatalf("PixelsWide = %d, want %d", target.PixelsWide, tt.wantWidth)
+			}
+			if target.Material != tt.wantMaterial {
+				t.Fatalf("Material = %q, want %q", target.Material, tt.wantMaterial)
 			}
 		})
 	}
@@ -388,6 +394,49 @@ func TestGenerateOverlayHighlightsLocatableIssues(t *testing.T) {
 	}
 }
 
+func TestDetailedProductionRecommendations(t *testing.T) {
+	var smallShapes strings.Builder
+	for i := 0; i < 80; i++ {
+		x := 20 + i%20
+		y := 220 + i/20
+		fmt.Fprintf(&smallShapes, `<circle cx="%d" cy="%d" r="0.2" fill="#111111"/>`, x, y)
+	}
+
+	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="14in" height="10in" viewBox="0 0 1344 960">
+		<rect width="1344" height="960" fill="#ffffff" fill-opacity="0.82"/>
+		<defs>
+			<filter id="soft"><feGaussianBlur stdDeviation="1.4"/></filter>
+			<filter id="shadow"><feDropShadow dx="6" dy="6" stdDeviation="4"/></filter>
+		</defs>
+		<polygon points="90,70 210,70 210,130 90,130" fill="#111111"/>
+		<polygon points="130,55 250,55 250,115 130,115" fill="#777777"/>
+		<polygon points="170,80 290,80 290,140 170,140" fill="#eeeeee"/>
+		<text x="120" y="112" font-size="38" fill="#ffffff">Acme</text>
+		<g stroke="#111111" fill="none">
+			<line x1="40" y1="180" x2="160" y2="180" stroke-width="1pt"/>
+			<line x1="40" y1="188" x2="160" y2="188" stroke-width="1pt"/>
+			<line x1="40" y1="196" x2="160" y2="196" stroke-width="1pt"/>
+			<line x1="40" y1="204" x2="160" y2="204" stroke-width="1pt"/>
+			<line x1="40" y1="212" x2="160" y2="212" stroke-width="1pt"/>
+			<line x1="40" y1="220" x2="160" y2="220" stroke-width="1pt"/>
+		</g>
+		<rect x="320" y="70" width="160" height="80" fill="#777777" filter="url(#shadow)"/>
+		<rect x="520" y="70" width="80" height="80" fill="#eeeeee" filter="url(#soft)"/>
+		` + smallShapes.String() + `
+	</svg>`)
+
+	report, err := Check(input, "fabric@14in")
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+
+	assertIssueMessageContains(t, report, "text-overlap-shapes", `"Acme"`, "overlaps 3 polygon")
+	assertIssueMessageContains(t, report, "thin-stroke", "6 stroked", "1pt", "14.0in on fabric")
+	assertIssueMessageContains(t, report, "small-detail-durability", "80 sub-1mm", "80 sub-2mm", "material choices")
+	assertIssueMessageContains(t, report, "fabric-effects", "subtle effect", "large shadow")
+	assertIssueMessageContains(t, report, "background-transparency", "1 background transparency issue")
+}
+
 func TestDownloadedFixtureCoverage(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -596,6 +645,19 @@ func issueByCode(report Report, code string) *Issue {
 		}
 	}
 	return nil
+}
+
+func assertIssueMessageContains(t *testing.T, report Report, code string, parts ...string) {
+	t.Helper()
+	issue := issueByCode(report, code)
+	if issue == nil {
+		t.Fatalf("expected issue %q in %#v", code, report.Issues)
+	}
+	for _, part := range parts {
+		if !strings.Contains(issue.Message, part) {
+			t.Fatalf("expected issue %q message to contain %q, got %q", code, part, issue.Message)
+		}
+	}
 }
 
 func closeTo(got, want, tolerance float64) bool {
