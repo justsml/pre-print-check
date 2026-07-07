@@ -175,7 +175,7 @@ func writeOverlayPanel(out *strings.Builder, report Report, x, y, width, scale f
 	fmt.Fprintf(out, `<rect x="0" y="0" width="%s" height="%s" rx="%s" fill="#0f172a" opacity="0.92"/>`+"\n", trimFloat(width), trimFloat(height), trimFloat(10*scale))
 	fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" font-weight="800" fill="#ffffff">Pre-print overlay</text>`+"\n", trimFloat(14*scale), trimFloat(23*scale), trimFloat(14*scale))
 	fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" fill="#cbd5e1">%d error(s) · %d warning(s) · %d note(s)</text>`+"\n", trimFloat(14*scale), trimFloat(42*scale), trimFloat(10*scale), errors, warnings, info)
-	fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" fill="#93c5fd">%s</text>`+"\n", trimFloat(14*scale), trimFloat(59*scale), trimFloat(9*scale), escapeText(report.Summary()))
+	fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" fill="#93c5fd">%s</text>`+"\n", trimFloat(14*scale), trimFloat(59*scale), trimFloat(9*scale), escapeText(overlayMetaSummary(report)))
 
 	yCursor := 80 * scale
 	for i, issue := range report.Issues {
@@ -195,6 +195,23 @@ func writeOverlayPanel(out *strings.Builder, report Report, x, y, width, scale f
 		yCursor += lineHeight
 	}
 	out.WriteString("</g>\n")
+}
+
+func overlayMetaSummary(report Report) string {
+	parts := []string{}
+	if report.Meta.Width != "" && report.Meta.Height != "" {
+		parts = append(parts, fmt.Sprintf("%s x %s", report.Meta.Width, report.Meta.Height))
+	}
+	if report.Meta.ViewBox != "" {
+		parts = append(parts, "viewBox set")
+	}
+	if report.Target.Raw != "" {
+		parts = append(parts, "target "+report.Target.Raw)
+	}
+	if len(parts) == 0 {
+		return "Metadata available"
+	}
+	return strings.Join(parts, " / ")
 }
 
 func writeHighlightedGeometry(out *strings.Builder, shape thinShape, stroke string, strokeWidth, opacity float64) {

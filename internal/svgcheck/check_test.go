@@ -86,6 +86,113 @@ func TestUnsafeFixRemovesScriptAndEventHandlers(t *testing.T) {
 	}
 }
 
+func TestFixCategoriesScopeChanges(t *testing.T) {
+	input := []byte(`<svg width="100" height="50"><script>alert(1)</script><rect onclick="x()" /></svg>`)
+
+	metadataOnly, err := Fix(input, FixOptions{Categories: []string{"metadata"}})
+	if err != nil {
+		t.Fatalf("Fix metadata returned error: %v", err)
+	}
+	got := string(metadataOnly.SVG)
+	if !strings.Contains(got, `xmlns="http://www.w3.org/2000/svg"`) || !strings.Contains(got, `viewBox="0 0 100 50"`) {
+		t.Fatalf("expected metadata fixes, got %s", got)
+	}
+	if !strings.Contains(got, "<script") || !strings.Contains(got, "onclick") {
+		t.Fatalf("metadata fix should not remove unsafe content, got %s", got)
+	}
+
+	safetyOnly, err := Fix(input, FixOptions{Unsafe: true, Categories: []string{"safety"}})
+	if err != nil {
+		t.Fatalf("Fix safety returned error: %v", err)
+	}
+	got = string(safetyOnly.SVG)
+	if strings.Contains(got, "<script") || strings.Contains(got, "onclick") {
+		t.Fatalf("expected safety fix to remove unsafe content, got %s", got)
+	}
+	if strings.Contains(got, "viewBox") {
+		t.Fatalf("safety-only fix should not add metadata, got %s", got)
+	}
+}
+
+func TestFixAllSkipsUnsafeChangesWithoutUnsafeFlag(t *testing.T) {
+	result, err := Fix([]byte(`<svg width="100" height="50"><script>alert(1)</script><rect onclick="x()" /></svg>`), FixOptions{})
+	if err != nil {
+		t.Fatalf("Fix returned error: %v", err)
+	}
+
+	got := string(result.SVG)
+	if strings.Contains(got, "<script") == false || strings.Contains(got, "onclick") == false {
+		t.Fatalf("expected unsafe content to remain without --unsafe, got %s", got)
+	}
+	if len(result.Skipped) == 0 {
+		t.Fatalf("expected skipped unsafe note, got %#v", result)
+	}
+}
+
+func TestFixEffectsAndRasterRequireUnsafe(t *testing.T) {
+	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" viewBox="0 0 100 50">
+		<defs><filter id="blur"><feGaussianBlur stdDeviation="2"/></filter></defs>
+		<image href="data:image/png;base64,AAA=" width="10" height="10"/>
+		<rect filter="url(#blur)" opacity="0.5" width="20" height="20"/>
+	</svg>`)
+
+	safeResult, err := Fix(input, FixOptions{Target: "paper", Categories: []string{"effects,raster"}})
+	if err != nil {
+		t.Fatalf("Fix safe effects/raster returned error: %v", err)
+	}
+	if !strings.Contains(string(safeResult.SVG), "<filter") || !strings.Contains(string(safeResult.SVG), "<image") {
+		t.Fatalf("expected destructive content to remain without unsafe, got %s", string(safeResult.SVG))
+	}
+	if len(safeResult.Skipped) < 2 {
+		t.Fatalf("expected skipped notes for effects and raster, got %#v", safeResult.Skipped)
+	}
+
+	unsafeResult, err := Fix(input, FixOptions{Target: "paper", Unsafe: true, Categories: []string{"effects,raster"}})
+	if err != nil {
+		t.Fatalf("Fix unsafe effects/raster returned error: %v", err)
+	}
+	got := strings.ToLower(string(unsafeResult.SVG))
+	for _, removed := range []string{"<filter", "<image", "filter=", "opacity="} {
+		if strings.Contains(got, removed) {
+			t.Fatalf("expected %q to be removed, got %s", removed, got)
+		}
+	}
+}
+
+func TestFixBleedExpandsBackgroundRect(t *testing.T) {
+	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="4in" height="3in" viewBox="0 0 384 288">
+		<rect width="384" height="288" fill="#f8fafc"/>
+	</svg>`)
+
+	result, err := Fix(input, FixOptions{Target: "paper", Categories: []string{"bleed"}})
+	if err != nil {
+		t.Fatalf("Fix bleed returned error: %v", err)
+	}
+	got := string(result.SVG)
+	if !strings.Contains(got, `x="-15.118"`) || !strings.Contains(got, `width="414.236"`) {
+		t.Fatalf("expected background rect to expand for bleed, got %s", got)
+	}
+}
+
+func TestParseFixCategories(t *testing.T) {
+	categories, err := ParseFixCategories("metadata, safety effects")
+	if err != nil {
+		t.Fatalf("ParseFixCategories returned error: %v", err)
+	}
+	want := []string{"metadata", "safety", "effects"}
+	if !slices.Equal(categories, want) {
+		t.Fatalf("categories = %#v, want %#v", categories, want)
+	}
+
+	for _, raw := range []string{"metadata,,safety", ",metadata", "metadata,", "not-real"} {
+		t.Run(raw, func(t *testing.T) {
+			if _, err := ParseFixCategories(raw); err == nil {
+				t.Fatalf("expected ParseFixCategories(%q) to fail", raw)
+			}
+		})
+	}
+}
+
 func TestParseTargets(t *testing.T) {
 	tests := []struct {
 		name         string

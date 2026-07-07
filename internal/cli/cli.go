@@ -15,7 +15,7 @@ const usage = `pre-print validates and repairs SVGs for print and web.
 
 Usage:
   pre-print check [--target screen|paper|fabric|vinyl|20ft|4k] [--format terminal|md|html] [--overlay OUTPUT.svg] FILE.svg
-  pre-print fix [--target TARGET] [--unsafe] [-o OUTPUT.svg] FILE.svg
+  pre-print fix [--target TARGET] [--fix all|metadata,safety,...] [--unsafe] [-o OUTPUT.svg] FILE.svg
 
 Commands:
   check    Report print/web risks in an SVG
@@ -93,6 +93,7 @@ func runFix(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("fix", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	target := fs.String("target", "", "output material or estimated size, e.g. screen, paper, fabric, vinyl, 20ft, 4k")
+	fixCategoriesRaw := fs.String("fix", "all", "comma- or space-separated fix categories; default all")
 	output := fs.String("o", "", "output path; defaults to overwriting FILE.svg")
 	unsafe := fs.Bool("unsafe", false, "allow broader transformations that may change rendering")
 	if err := fs.Parse(args); err != nil {
@@ -100,6 +101,11 @@ func runFix(args []string, stdout, stderr io.Writer) int {
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(stderr, "fix requires exactly one SVG file")
+		return 2
+	}
+	fixCategories, err := svgcheck.ParseFixCategories(*fixCategoriesRaw)
+	if err != nil {
+		fmt.Fprintf(stderr, "fix failed: %v\n", err)
 		return 2
 	}
 
@@ -111,8 +117,9 @@ func runFix(args []string, stdout, stderr io.Writer) int {
 	}
 
 	result, err := svgcheck.Fix(input, svgcheck.FixOptions{
-		Target: *target,
-		Unsafe: *unsafe,
+		Target:     *target,
+		Unsafe:     *unsafe,
+		Categories: fixCategories,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "fix failed: %v\n", err)
@@ -130,12 +137,18 @@ func runFix(args []string, stdout, stderr io.Writer) int {
 
 	if len(result.Changes) == 0 {
 		fmt.Fprintf(stdout, "No changes needed: %s\n", outPath)
+		for _, skipped := range result.Skipped {
+			fmt.Fprintf(stdout, "- skipped: %s\n", skipped)
+		}
 		return 0
 	}
 
 	fmt.Fprintf(stdout, "Wrote %s\n", outPath)
 	for _, change := range result.Changes {
 		fmt.Fprintf(stdout, "- %s\n", change)
+	}
+	for _, skipped := range result.Skipped {
+		fmt.Fprintf(stdout, "- skipped: %s\n", skipped)
 	}
 	return 0
 }

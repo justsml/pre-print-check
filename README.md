@@ -19,7 +19,9 @@ make build
 ./pre-print check --target 20ft --format html art.svg
 ./pre-print check --target 4k art.svg
 ./pre-print fix -o art.fixed.svg art.svg
+./pre-print fix --fix metadata -o art.fixed.svg art.svg
 ./pre-print fix --unsafe art.svg
+./pre-print fix --fix effects,raster --unsafe -o stripped.svg art.svg
 ```
 
 `check` produces a friendly preflight summary in terminal text by default, or Markdown/HTML with `--format md` or `--format html`.
@@ -49,12 +51,25 @@ Targets may be estimated sizes/resolutions such as `20ft`, `1.2m`, `90in`, `4k`,
 - `cnc`
 - `plotter`
 
-`fix` currently makes conservative changes by default:
+`fix` accepts `--fix` with a comma- or space-separated category list. If omitted, it defaults to `all`.
+
+Available categories:
+
+- `metadata`: add missing SVG namespace, derive `viewBox` from numeric size, and derive missing `width`/`height` from `viewBox`
+- `safety`: remove scripts and inline event handler attributes; requires `--unsafe`
+- `bleed`: expand simple full-background rects past trim when the checker can infer a missing bleed
+- `effects`: remove filters, masks, clip paths, opacity, and related effect attributes; requires `--unsafe`
+- `raster`: remove SVG `<image>` elements; requires `--unsafe`
+- `references`, `colors`, `strokes`, `geometry`, `typography`, `detail`, `sizing`, and `cutter`: emit skipped/advisory notes today because these usually need source assets, fonts, color profiles, production templates, or design judgment
+
+Safe/default fixes currently include:
 
 - add the SVG namespace when missing
 - add a `viewBox` from numeric `width` and `height` when missing
+- add missing `width` or `height` from `viewBox` when possible
+- expand simple background rectangles for bleed when the target and geometry make that clear
 
-With `--unsafe`, it may also remove script elements and inline event handler attributes.
+With `--unsafe`, selected categories may also remove script elements, inline event handler attributes, raster image elements, and effect/transparency constructs. These are intentionally gated because they can change the artwork.
 
 ## Preflight model
 
