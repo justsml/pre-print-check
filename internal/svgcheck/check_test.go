@@ -205,6 +205,78 @@ func TestInlineRasterAndColorCountAreRanked(t *testing.T) {
 	}
 }
 
+func TestTargetProfilesApplyOnlyRelevantProductionChecks(t *testing.T) {
+	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+		<defs><filter id="shadow"><feDropShadow dx="1" dy="1" stdDeviation="2" /></filter></defs>
+		<image href="data:image/png;base64,AAA=" width="20" height="20" />
+		<rect fill="#ff0000" stroke="#000000" stroke-width="0.2px" filter="url(#shadow)" width="50" height="50" />
+	</svg>`)
+
+	tests := []struct {
+		name      string
+		target    string
+		wantCodes []string
+		denyCodes []string
+	}{
+		{
+			name:   "screen keeps print-only checks quiet",
+			target: "screen",
+			denyCodes: []string{
+				"color-count",
+				"raster-image",
+				"inline-raster-image",
+				"shadow-effect",
+				"thin-stroke",
+				"rgb-colors-for-print",
+				"print-effects-require-flattening",
+			},
+		},
+		{
+			name:      "paper requires press color and flattened effects",
+			target:    "paper",
+			wantCodes: []string{"color-count", "inline-raster-image", "shadow-effect", "thin-stroke", "rgb-colors-for-print", "print-effects-require-flattening"},
+		},
+		{
+			name:      "physical size behaves like production review without CMYK assumptions",
+			target:    "20ft",
+			wantCodes: []string{"color-count", "inline-raster-image", "shadow-effect", "thin-stroke", "low-effective-ppi"},
+			denyCodes: []string{
+				"rgb-colors-for-print",
+				"print-effects-require-flattening",
+			},
+		},
+		{
+			name:      "cutter target prioritizes geometry errors",
+			target:    "vinyl",
+			wantCodes: []string{"raster-not-cuttable", "effects-may-not-output", "thin-stroke"},
+			denyCodes: []string{
+				"raster-image",
+				"rgb-colors-for-print",
+				"print-effects-require-flattening",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report, err := Check(input, tt.target)
+			if err != nil {
+				t.Fatalf("Check returned error: %v", err)
+			}
+			for _, code := range tt.wantCodes {
+				if !hasIssueCode(report, code) {
+					t.Fatalf("expected issue %q in %#v", code, report.Issues)
+				}
+			}
+			for _, code := range tt.denyCodes {
+				if hasIssueCode(report, code) {
+					t.Fatalf("did not expect issue %q in %#v", code, report.Issues)
+				}
+			}
+		})
+	}
+}
+
 func TestDownloadedFixtureCoverage(t *testing.T) {
 	tests := []struct {
 		name      string

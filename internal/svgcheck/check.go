@@ -68,6 +68,20 @@ type SVGMeta struct {
 	CMYKColors         int
 }
 
+type issueProfile struct {
+	Material                  MaterialTarget
+	ReviewArtworkComplexity   bool
+	ReviewRasterResolution    bool
+	WarnExternalReferences    bool
+	RequireSelfContained      bool
+	RequirePrintColors        bool
+	RequireFlattenedEffects   bool
+	ReviewEffects             bool
+	ReviewThinStrokes         bool
+	ReviewFabricColorCount    bool
+	RequirePureVectorGeometry bool
+}
+
 func CheckFile(path string, rawTarget string) (Report, error) {
 	input, err := os.ReadFile(path)
 	if err != nil {
@@ -90,7 +104,8 @@ func Check(input []byte, rawTarget string) (Report, error) {
 	}
 
 	report := Report{Target: target, Meta: meta}
-	report.addCoreIssues()
+	profile := issueProfileForTarget(target)
+	report.addCoreIssues(profile)
 	report.addTargetIssues()
 	return report, nil
 }
@@ -139,7 +154,7 @@ func (r Report) IssueCounts() (errors, warnings, info int) {
 	return errors, warnings, info
 }
 
-func (r *Report) addCoreIssues() {
+func (r *Report) addCoreIssues(profile issueProfile) {
 	if !r.Meta.HasXMLNS {
 		r.addIssue(SeverityWarning, "missing-xmlns", "root <svg> is missing xmlns=\"http://www.w3.org/2000/svg\"")
 	}
@@ -155,19 +170,19 @@ func (r *Report) addCoreIssues() {
 	if r.Meta.EventAttrs > 0 {
 		r.addIssue(SeverityError, "event-handler", "SVG contains inline event handler attributes")
 	}
-	if r.Meta.ExternalRefs > 0 {
+	if r.Meta.ExternalRefs > 0 && profile.WarnExternalReferences {
 		r.addIssue(SeverityWarning, "external-reference", "SVG references external resources that may not render offline or in print")
 	}
-	if r.Meta.RasterImages > 0 {
+	if r.Meta.RasterImages > 0 && profile.ReviewRasterResolution && !profile.RequirePureVectorGeometry {
 		r.addRankedIssue(SeverityWarning, "raster-image", "SVG embeds or references raster images; verify effective resolution for the final size", rankRasterImages(r.Meta.RasterImages))
 	}
-	if r.Meta.InlineRasterImages > 0 {
+	if r.Meta.InlineRasterImages > 0 && profile.ReviewRasterResolution {
 		r.addRankedIssue(SeverityWarning, "inline-raster-image", "SVG includes base64/data URI raster images; inspect them closely because resolution and color space are opaque to downstream print tools", rankRasterImages(r.Meta.InlineRasterImages))
 	}
-	if r.Meta.UniqueColors > 0 {
+	if r.Meta.UniqueColors > 0 && profile.ReviewArtworkComplexity {
 		r.addRankedIssue(SeverityInfo, "color-count", fmt.Sprintf("SVG uses about %d unique color value(s); many colors can complicate separations, spot-color conversion, and production review", r.Meta.UniqueColors), rankColorCount(r.Meta.UniqueColors))
 	}
-	if r.Meta.Shadows > 0 {
+	if r.Meta.Shadows > 0 && profile.ReviewEffects {
 		r.addRankedIssue(SeverityWarning, "shadow-effect", "SVG appears to use shadow-style effects; these often rasterize, flatten, or separate unpredictably in print workflows", RankHigh)
 	}
 }
@@ -177,8 +192,13 @@ func (r *Report) addTargetIssues() {
 		return
 	}
 
+	profile := issueProfileForTarget(r.Target)
+	if r.Meta.ThinStrokes > 0 && profile.ReviewThinStrokes {
+		r.addRankedIssue(SeverityWarning, "thin-stroke", "SVG contains very thin strokes that may disappear, break up, or image unpredictably in print production", RankModerate)
+	}
+
 	if r.Target.Material != "" {
-		r.addMaterialIssues()
+		r.addMaterialIssues(profile)
 	}
 
 	if r.Meta.WidthPixels == 0 {
@@ -199,16 +219,13 @@ func (r *Report) addTargetIssues() {
 	}
 }
 
-func (r *Report) addMaterialIssues() {
+func (r *Report) addMaterialIssues(profile issueProfile) {
 	material := r.Target.Material
 	if material.NeedsPhysicalSize() && r.Target.WidthInches == 0 {
 		r.addIssue(SeverityInfo, "target-size-recommended", "provide a physical size target as well when checking effective raster resolution")
 	}
-	if r.Meta.ThinStrokes > 0 {
-		r.addRankedIssue(SeverityWarning, "thin-stroke", "SVG contains very thin strokes that may disappear, break up, or image unpredictably in print production", RankModerate)
-	}
 
-	if material.NeedsPureVectorGeometry() {
+	if profile.RequirePureVectorGeometry {
 		if r.Meta.RasterImages > 0 {
 			r.addRankedIssue(SeverityError, "raster-not-cuttable", "cutting and engraving targets need paths, not raster image elements", RankHigh)
 		}
@@ -220,22 +237,27 @@ func (r *Report) addMaterialIssues() {
 		}
 	}
 
-	switch material {
-	case MaterialPaper, MaterialPackaging:
+	if profile.RequirePrintColors {
 		if r.Meta.ColorValues > 0 && r.Meta.CMYKColors == 0 {
 			r.addRankedIssue(SeverityWarning, "rgb-colors-for-print", "SVG color values are RGB/web oriented; convert and proof in the printer's required CMYK or spot-color workflow before press", RankHigh)
 		}
 		if r.Meta.CMYKColors > 0 {
 			r.addIssue(SeverityWarning, "cmyk-in-svg", "CMYK-like color values were found, but SVG support is inconsistent; confirm the final PDF or RIP preserves intended print colors")
 		}
+	}
+
+	if profile.RequireFlattenedEffects {
 		if r.Meta.Filters > 0 || r.Meta.FilterRefs > 0 || r.Meta.BlendModes > 0 {
 			r.addRankedIssue(SeverityError, "print-effects-require-flattening", "filters, filter references, and blend modes should be flattened or proofed in a press-ready PDF workflow", RankHigh)
 		}
+	}
+
+	switch material {
 	case MaterialFabric:
 		if r.Meta.Filters > 0 {
 			r.addRankedIssue(SeverityWarning, "fabric-effects", "soft effects such as filters may rasterize or separate poorly for fabric production", RankModerate)
 		}
-		if r.Meta.ColorValues > 0 && r.Meta.UniqueColors > 24 {
+		if r.Meta.ColorValues > 0 && r.Meta.UniqueColors > 24 && profile.ReviewFabricColorCount {
 			r.addRankedIssue(SeverityWarning, "many-fabric-colors", "many color values can increase setup complexity for screen print, embroidery, vinyl, or spot-color textile workflows", rankColorCount(r.Meta.UniqueColors))
 		}
 	case MaterialBanner, MaterialSignage, MaterialVehicleWrap:
@@ -247,9 +269,67 @@ func (r *Report) addMaterialIssues() {
 		}
 	}
 
-	if material == MaterialPackaging && r.Meta.ExternalRefs > 0 {
+	if profile.RequireSelfContained && r.Meta.ExternalRefs > 0 {
 		r.addIssue(SeverityWarning, "packaging-external-reference", "package artwork should be self-contained for handoff and archiving")
 	}
+}
+
+func issueProfileForTarget(target Target) issueProfile {
+	profile := issueProfile{
+		Material:                target.Material,
+		ReviewArtworkComplexity: target.Raw == "" || target.WidthInches > 0,
+		ReviewRasterResolution:  target.Raw == "" || target.WidthInches > 0,
+		WarnExternalReferences:  target.Raw == "" || target.WidthInches > 0,
+		ReviewEffects:           target.Raw == "" || target.WidthInches > 0,
+		ReviewThinStrokes:       target.WidthInches > 0,
+	}
+
+	switch target.Material {
+	case MaterialScreen:
+		profile.ReviewArtworkComplexity = false
+		profile.ReviewRasterResolution = false
+		profile.WarnExternalReferences = false
+		profile.ReviewEffects = false
+	case MaterialPaper:
+		profile.ReviewArtworkComplexity = true
+		profile.ReviewRasterResolution = true
+		profile.WarnExternalReferences = true
+		profile.RequirePrintColors = true
+		profile.RequireFlattenedEffects = true
+		profile.ReviewEffects = true
+		profile.ReviewThinStrokes = true
+	case MaterialPackaging:
+		profile.ReviewArtworkComplexity = true
+		profile.ReviewRasterResolution = true
+		profile.WarnExternalReferences = true
+		profile.RequireSelfContained = true
+		profile.RequirePrintColors = true
+		profile.RequireFlattenedEffects = true
+		profile.ReviewEffects = true
+		profile.ReviewThinStrokes = true
+	case MaterialFabric:
+		profile.ReviewArtworkComplexity = true
+		profile.ReviewRasterResolution = true
+		profile.WarnExternalReferences = true
+		profile.ReviewEffects = true
+		profile.ReviewThinStrokes = true
+		profile.ReviewFabricColorCount = true
+	case MaterialBanner, MaterialSignage, MaterialVehicleWrap:
+		profile.ReviewArtworkComplexity = true
+		profile.ReviewRasterResolution = true
+		profile.WarnExternalReferences = true
+		profile.ReviewEffects = true
+		profile.ReviewThinStrokes = true
+	case MaterialVinyl, MaterialLaser, MaterialCNC, MaterialPlotter:
+		profile.ReviewArtworkComplexity = true
+		profile.ReviewRasterResolution = true
+		profile.WarnExternalReferences = true
+		profile.ReviewEffects = true
+		profile.ReviewThinStrokes = true
+		profile.RequirePureVectorGeometry = true
+	}
+
+	return profile
 }
 
 func (r *Report) addIssue(severity Severity, code, message string) {
