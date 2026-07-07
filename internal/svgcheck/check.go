@@ -62,6 +62,7 @@ type SVGMeta struct {
 	ClipPaths          int
 	Opacity            int
 	BlendModes         int
+	ThinStrokes        int
 	ColorValues        int
 	UniqueColors       int
 	CMYKColors         int
@@ -203,6 +204,9 @@ func (r *Report) addMaterialIssues() {
 	if material.NeedsPhysicalSize() && r.Target.WidthInches == 0 {
 		r.addIssue(SeverityInfo, "target-size-recommended", "provide a physical size target as well when checking effective raster resolution")
 	}
+	if r.Meta.ThinStrokes > 0 {
+		r.addRankedIssue(SeverityWarning, "thin-stroke", "SVG contains very thin strokes that may disappear, break up, or image unpredictably in print production", RankModerate)
+	}
 
 	if material.NeedsPureVectorGeometry() {
 		if r.Meta.RasterImages > 0 {
@@ -333,6 +337,8 @@ func inspect(input []byte) (SVGMeta, error) {
 				}
 				inspectAttrForPrintSignals(attrName, attrValue, &meta)
 			}
+		case xml.CharData:
+			meta.ExternalRefs += countExternalCSSResourceRefs(string(tok))
 		}
 	}
 
@@ -343,7 +349,7 @@ func inspect(input []byte) (SVGMeta, error) {
 	return meta, nil
 }
 
-var lengthPattern = regexp.MustCompile(`^\s*([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z%]*)\s*$`)
+var lengthPattern = regexp.MustCompile(`^\s*([0-9]*\.?[0-9]+)\s*([a-zA-Z%]*)\s*$`)
 
 func parseSVGLengthPixels(value string) float64 {
 	matches := lengthPattern.FindStringSubmatch(value)
@@ -379,6 +385,12 @@ func referencesExternalResource(value string) bool {
 	return strings.HasPrefix(lower, "http://") ||
 		strings.HasPrefix(lower, "https://") ||
 		strings.HasPrefix(lower, "//")
+}
+
+var externalCSSResourcePattern = regexp.MustCompile(`(?i)\burl\(\s*['"]?(?:https?:)?//`)
+
+func countExternalCSSResourceRefs(value string) int {
+	return len(externalCSSResourcePattern.FindAllString(value, -1))
 }
 
 func isResourceReferenceAttr(name string) bool {
@@ -421,6 +433,10 @@ func inspectAttrForPrintSignals(name, value string, meta *SVGMeta) {
 		if value != "" && value != "1" && strings.ToLower(value) != "100%" {
 			meta.Opacity++
 		}
+	case "stroke-width":
+		if strokeWidthLooksThin(value) {
+			meta.ThinStrokes++
+		}
 	}
 
 	if strings.Contains(lowerValue, "device-cmyk") || strings.Contains(lowerValue, "cmyk(") || strings.Contains(lowerValue, "icc-color(") {
@@ -432,6 +448,11 @@ func inspectAttrForPrintSignals(name, value string, meta *SVGMeta) {
 	if strings.Contains(lowerValue, "mix-blend-mode") || strings.Contains(lowerValue, "background-blend-mode") {
 		meta.BlendModes++
 	}
+}
+
+func strokeWidthLooksThin(value string) bool {
+	pixels := parseSVGLengthPixels(value)
+	return pixels > 0 && pixels < 0.35
 }
 
 func inspectStyle(style string, meta *SVGMeta) {

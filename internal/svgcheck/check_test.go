@@ -212,7 +212,7 @@ func TestDownloadedFixtureCoverage(t *testing.T) {
 		wantCodes []string
 	}{
 		{
-			name:      "checkout-example-fp-clean.svg",
+			name:      "code-example.svg",
 			target:    "paper",
 			wantCodes: []string{"missing-viewbox", "color-count", "shadow-effect", "rgb-colors-for-print", "print-effects-require-flattening"},
 		},
@@ -222,17 +222,17 @@ func TestDownloadedFixtureCoverage(t *testing.T) {
 			wantCodes: []string{"color-count", "rgb-colors-for-print"},
 		},
 		{
-			name:      "formatting-international-currency.svg",
+			name:      "formatting-currency-infographic.svg",
 			target:    "paper",
 			wantCodes: []string{"color-count", "rgb-colors-for-print"},
 		},
 		{
-			name:      "docslurp-view-workspace.svg",
+			name:      "site-mockup-lowres.svg",
 			target:    "paper",
 			wantCodes: []string{"color-count", "rgb-colors-for-print"},
 		},
 		{
-			name:      "freepik-education-tech-logo-79211.svg",
+			name:      "ed-tech-logo.svg",
 			target:    "paper",
 			wantCodes: []string{"color-count", "rgb-colors-for-print"},
 		},
@@ -257,6 +257,138 @@ func TestDownloadedFixtureCoverage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGeneratedPrintEdgeCaseFixtures(t *testing.T) {
+	tests := []struct {
+		name      string
+		target    string
+		wantCodes []string
+	}{
+		{
+			name:      "print-edge-thin-lines.svg",
+			target:    "paper",
+			wantCodes: []string{"thin-stroke", "color-count", "rgb-colors-for-print"},
+		},
+		{
+			name:      "print-edge-cmyk-colors.svg",
+			target:    "paper",
+			wantCodes: []string{"cmyk-in-svg", "color-count"},
+		},
+		{
+			name:      "print-edge-effects.svg",
+			target:    "paper",
+			wantCodes: []string{"shadow-effect", "rgb-colors-for-print", "print-effects-require-flattening"},
+		},
+		{
+			name:      "print-edge-many-colors.svg",
+			target:    "fabric",
+			wantCodes: []string{"color-count", "many-fabric-colors"},
+		},
+		{
+			name:      "print-edge-stylized-fonts.svg",
+			target:    "vinyl",
+			wantCodes: []string{"external-reference", "text-not-outlined"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := checkFixture(t, tt.name, tt.target)
+			for _, code := range tt.wantCodes {
+				if !hasIssueCode(report, code) {
+					t.Fatalf("expected issue %q in %#v", code, report.Issues)
+				}
+			}
+		})
+	}
+
+	cmykReport := checkFixture(t, "print-edge-cmyk-colors.svg", "paper")
+	if hasIssueCode(cmykReport, "rgb-colors-for-print") {
+		t.Fatalf("did not expect rgb-colors-for-print when CMYK-like color values are present: %#v", cmykReport.Issues)
+	}
+
+	manyColorReport := checkFixture(t, "print-edge-many-colors.svg", "")
+	colorCount := issueByCode(manyColorReport, "color-count")
+	if colorCount == nil {
+		t.Fatalf("expected color-count in %#v", manyColorReport.Issues)
+	}
+	if colorCount.Rank != RankHigh {
+		t.Fatalf("color-count rank = %q, want %q", colorCount.Rank, RankHigh)
+	}
+}
+
+func TestSVGTestAssetsAreValidAndCovered(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("testdata", "*.svg"))
+	if err != nil {
+		t.Fatalf("glob fixtures: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("expected SVG fixtures in testdata")
+	}
+
+	covered := coveredFixtureNames()
+	for _, path := range paths {
+		name := filepath.Base(path)
+		t.Run(name, func(t *testing.T) {
+			if _, ok := covered[name]; !ok {
+				t.Fatalf("fixture is not covered by an expectation test")
+			}
+
+			input, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read fixture: %v", err)
+			}
+			if len(input) == 0 {
+				t.Fatal("fixture is empty")
+			}
+
+			report, err := Check(input, "")
+			if err != nil {
+				t.Fatalf("Check returned error: %v", err)
+			}
+			if !report.Meta.FoundSVG {
+				t.Fatal("fixture did not expose an SVG root")
+			}
+			if len(report.Issues) == 0 {
+				t.Fatal("fixture does not currently exercise any checker signal")
+			}
+		})
+	}
+}
+
+func coveredFixtureNames() map[string]struct{} {
+	names := []string{
+		"code-example.svg",
+		"ed-tech-logo.svg",
+		"formatting-currency-infographic.svg",
+		"site-mockup-lowres.svg",
+		"url-comparison-chart.svg",
+		"print-edge-cmyk-colors.svg",
+		"print-edge-effects.svg",
+		"print-edge-many-colors.svg",
+		"print-edge-stylized-fonts.svg",
+		"print-edge-thin-lines.svg",
+	}
+
+	covered := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		covered[name] = struct{}{}
+	}
+	return covered
+}
+
+func checkFixture(t *testing.T, name, target string) Report {
+	t.Helper()
+	input, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	report, err := Check(input, target)
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+	return report
 }
 
 func hasIssueCode(report Report, code string) bool {

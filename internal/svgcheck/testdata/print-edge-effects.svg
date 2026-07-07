@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="5in" height="3in" viewBox="0 0 480 288">
+  <defs>
+    <filter id="drop-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="6" dy="8" stdDeviation="5" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <rect width="480" height="288" fill="#f7f5ed"/>
+  <circle cx="190" cy="144" r="88" fill="#f15a24" opacity="0.72" filter="url(#drop-shadow)"/>
+  <circle cx="275" cy="144" r="88" fill="#0057b8" style="mix-blend-mode:multiply"/>
+</svg>

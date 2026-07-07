@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="6in" height="4in" viewBox="0 0 576 384">
+  <defs>
+    <style>
+      @font-face {
+        font-family: "RemoteDisplay";
+        src: url("https://example.invalid/fonts/remote-display.woff2") format("woff2");
+      }
+      .script {
+        font-family: "RemoteDisplay", "Brush Script MT", cursive;
+        font-size: 58px;
+        fill: #7a1f5c;
+      }
+      .condensed {
+        font-family: "Arial Narrow", Impact, sans-serif;
+        font-size: 42px;
+        font-stretch: condensed;
+        letter-spacing: -1px;
+        fill: #1b4d89;
+      }
+      .outlined {
+        font-family: Georgia, serif;
+        font-size: 52px;
+        font-weight: 700;
+        fill: #ffffff;
+        stroke: #111111;
+        stroke-width: 0.8px;
+      }
+    </style>
+    <path id="arc" d="M 80 260 C 180 170, 360 170, 496 260"/>
+  </defs>
+  <rect width="576" height="384" fill="#fffaf0"/>
+  <text class="script" x="48" y="96">Live Script Text</text>
+  <text class="condensed" x="48" y="162">CONDENSED TYPE</text>
+  <text class="outlined" x="48" y="232">Outlined Fill</text>
+  <text font-family="Papyrus, fantasy" font-size="36px" fill="#6a5acd">
+    <textPath href="#arc" startOffset="50%" text-anchor="middle">Text on a curved path</textPath>
+  </text>
+</svg>
