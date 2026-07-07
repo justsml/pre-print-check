@@ -200,7 +200,7 @@ func (r *Report) addTargetIssues() {
 		r.addRankedIssue(SeverityWarning, "thin-stroke", "SVG contains very thin strokes that may disappear, break up, or image unpredictably in print production", RankModerate)
 	}
 	if r.Meta.NearDisconnected > 0 && profile.ReviewDisconnectedJoins {
-		r.addRankedIssue(SeverityWarning, "near-disconnected-lines", "SVG has open line/path endpoints that nearly touch; join or close them if they are meant to read as one contiguous shape at production scale", rankNearDisconnected(r.Meta.NearDisconnected))
+		r.addRankedIssue(SeverityWarning, "near-disconnected-lines", "SVG has stroked open line/path endpoints that visually read as connected but are not joined; use a polygon/closed path or join the nodes to avoid visible gaps or awkward overlaps at production scale", rankNearDisconnected(r.Meta.NearDisconnected))
 	}
 
 	if r.Target.Material != "" {
@@ -362,6 +362,7 @@ func inspect(input []byte) (SVGMeta, error) {
 	meta := SVGMeta{}
 	endpoints := []geometryEndpoint{}
 	geometrySource := 0
+	styleStack := []geometryStyle{defaultGeometryStyle()}
 
 	for {
 		token, err := decoder.Token()
@@ -375,6 +376,8 @@ func inspect(input []byte) (SVGMeta, error) {
 		switch tok := token.(type) {
 		case xml.StartElement:
 			name := strings.ToLower(tok.Name.Local)
+			currentStyle := inheritedGeometryStyle(styleStack[len(styleStack)-1], tok.Attr)
+			styleStack = append(styleStack, currentStyle)
 			if name == "svg" && !meta.FoundSVG {
 				meta.FoundSVG = true
 				for _, attr := range tok.Attr {
@@ -414,7 +417,7 @@ func inspect(input []byte) (SVGMeta, error) {
 			case "clippath":
 				meta.ClipPaths++
 			}
-			endpoints = append(endpoints, endpointsFromElement(name, tok.Attr, &geometrySource)...)
+			endpoints = append(endpoints, endpointsFromElement(name, tok.Attr, currentStyle, &geometrySource)...)
 
 			for _, attr := range tok.Attr {
 				attrName := strings.ToLower(attr.Name.Local)
@@ -434,6 +437,10 @@ func inspect(input []byte) (SVGMeta, error) {
 			}
 		case xml.CharData:
 			meta.ExternalRefs += countExternalCSSResourceRefs(string(tok))
+		case xml.EndElement:
+			if len(styleStack) > 1 {
+				styleStack = styleStack[:len(styleStack)-1]
+			}
 		}
 	}
 
@@ -642,11 +649,21 @@ func rankNearDisconnected(count int) FindingRank {
 }
 
 type geometryEndpoint struct {
-	x, y   float64
-	source int
+	x, y        float64
+	source      int
+	strokeWidth float64
 }
 
-func endpointsFromElement(name string, attrs []xml.Attr, sourceCounter *int) []geometryEndpoint {
+type geometryStyle struct {
+	stroke      string
+	strokeWidth float64
+}
+
+func endpointsFromElement(name string, attrs []xml.Attr, style geometryStyle, sourceCounter *int) []geometryEndpoint {
+	if !style.hasVisibleStroke() {
+		return nil
+	}
+
 	attr := attrsByName(attrs)
 	switch name {
 	case "line":
@@ -656,14 +673,14 @@ func endpointsFromElement(name string, attrs []xml.Attr, sourceCounter *int) []g
 		y2, ok4 := parseCoordinate(attr["y2"])
 		if ok1 && ok2 && ok3 && ok4 {
 			source := nextGeometrySource(sourceCounter)
-			return []geometryEndpoint{{x: x1, y: y1, source: source}, {x: x2, y: y2, source: source}}
+			return []geometryEndpoint{{x: x1, y: y1, source: source, strokeWidth: style.strokeWidth}, {x: x2, y: y2, source: source, strokeWidth: style.strokeWidth}}
 		}
 	case "polyline":
-		return endpointsFromPointList(attr["points"], false, sourceCounter)
+		return endpointsFromPointList(attr["points"], false, style, sourceCounter)
 	case "polygon":
-		return endpointsFromPointList(attr["points"], true, sourceCounter)
+		return endpointsFromPointList(attr["points"], true, style, sourceCounter)
 	case "path":
-		return endpointsFromPathData(attr["d"], sourceCounter)
+		return endpointsFromPathData(attr["d"], style, sourceCounter)
 	}
 	return nil
 }
@@ -688,7 +705,7 @@ func parseCoordinate(value string) (float64, bool) {
 	return parseSVGLengthPixels(value), true
 }
 
-func endpointsFromPointList(points string, closed bool, sourceCounter *int) []geometryEndpoint {
+func endpointsFromPointList(points string, closed bool, style geometryStyle, sourceCounter *int) []geometryEndpoint {
 	values := pathNumberPattern.FindAllString(points, -1)
 	if len(values) < 4 || len(values)%2 != 0 {
 		return nil
@@ -704,13 +721,15 @@ func endpointsFromPointList(points string, closed bool, sourceCounter *int) []ge
 	source := nextGeometrySource(sourceCounter)
 	first.source = source
 	last.source = source
+	first.strokeWidth = style.strokeWidth
+	last.strokeWidth = style.strokeWidth
 	return []geometryEndpoint{first, last}
 }
 
 var pathNumberPattern = regexp.MustCompile(`[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?`)
 var pathTokenPattern = regexp.MustCompile(`[AaCcHhLlMmQqSsTtVvZz]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?`)
 
-func endpointsFromPathData(data string, sourceCounter *int) []geometryEndpoint {
+func endpointsFromPathData(data string, style geometryStyle, sourceCounter *int) []geometryEndpoint {
 	tokens := pathTokenPattern.FindAllString(data, -1)
 	if len(tokens) == 0 {
 		return nil
@@ -742,6 +761,8 @@ func endpointsFromPathData(data string, sourceCounter *int) []geometryEndpoint {
 			if subpathOpen {
 				subpathStart.source = subpathSource
 				cur.source = subpathSource
+				subpathStart.strokeWidth = style.strokeWidth
+				cur.strokeWidth = style.strokeWidth
 				endpoints = append(endpoints, subpathStart, cur)
 			}
 			if i+1 >= len(tokens) {
@@ -856,6 +877,8 @@ func endpointsFromPathData(data string, sourceCounter *int) []geometryEndpoint {
 	if subpathOpen {
 		subpathStart.source = subpathSource
 		cur.source = subpathSource
+		subpathStart.strokeWidth = style.strokeWidth
+		cur.strokeWidth = style.strokeWidth
 		endpoints = append(endpoints, subpathStart, cur)
 	}
 	return endpoints
@@ -887,25 +910,60 @@ func isRelativePathCommand(cmd byte) bool {
 }
 
 const (
-	connectedEndpointTolerance = 0.01
-	nearEndpointMinDistance    = 0.05
-	nearEndpointMaxDistance    = 2.0
+	connectedEndpointTolerance   = 0.01
+	nearEndpointMinDistance      = 0.05
+	nearEndpointMaxDistance      = 12.0
+	nearDisconnectedMinimumPairs = 2
 )
 
 func countNearDisconnectedEndpoints(endpoints []geometryEndpoint) int {
-	count := 0
+	pairs := nearDisconnectedEndpointPairs(endpoints)
+	if len(pairs) < nearDisconnectedMinimumPairs {
+		return 0
+	}
+	return len(pairs)
+}
+
+type nearEndpointPair struct {
+	a, b     geometryEndpoint
+	distance float64
+}
+
+func nearDisconnectedEndpointPairs(endpoints []geometryEndpoint) []nearEndpointPair {
+	var pairs []nearEndpointPair
+	seenSources := map[[2]int]struct{}{}
+	nearestBySource := map[[2]int]nearEndpointPair{}
+
 	for i := 0; i < len(endpoints); i++ {
 		for j := i + 1; j < len(endpoints); j++ {
 			if endpoints[i].source == endpoints[j].source {
 				continue
 			}
+			sourceKey := orderedSourceKey(endpoints[i].source, endpoints[j].source)
 			distance := endpointDistance(endpoints[i], endpoints[j])
-			if distance >= nearEndpointMinDistance && distance <= nearEndpointMaxDistance {
-				count++
+			if !looksVisuallyConnectedButUnjoined(endpoints[i], endpoints[j], distance) {
+				continue
 			}
+			pair := nearEndpointPair{a: endpoints[i], b: endpoints[j], distance: distance}
+			current, ok := nearestBySource[sourceKey]
+			if !ok || distance < current.distance {
+				nearestBySource[sourceKey] = pair
+			}
+			seenSources[sourceKey] = struct{}{}
 		}
 	}
-	return count
+
+	for sourceKey := range seenSources {
+		pairs = append(pairs, nearestBySource[sourceKey])
+	}
+	return pairs
+}
+
+func orderedSourceKey(a, b int) [2]int {
+	if a < b {
+		return [2]int{a, b}
+	}
+	return [2]int{b, a}
 }
 
 func endpointDistance(a, b geometryEndpoint) float64 {
@@ -914,4 +972,53 @@ func endpointDistance(a, b geometryEndpoint) float64 {
 
 func pointsNearlyEqual(a, b geometryEndpoint, tolerance float64) bool {
 	return endpointDistance(a, b) <= tolerance
+}
+
+func looksVisuallyConnectedButUnjoined(a, b geometryEndpoint, distance float64) bool {
+	if distance < nearEndpointMinDistance {
+		return false
+	}
+	strokeWidth := math.Max(a.strokeWidth, b.strokeWidth)
+	if strokeWidth <= 0 {
+		return false
+	}
+	return distance <= math.Min(nearEndpointMaxDistance, strokeWidth*nearEndpointStrokeRatio)
+}
+
+const nearEndpointStrokeRatio = 0.75
+
+func defaultGeometryStyle() geometryStyle {
+	return geometryStyle{
+		stroke:      "none",
+		strokeWidth: 1,
+	}
+}
+
+func (s geometryStyle) hasVisibleStroke() bool {
+	return s.stroke != "" && strings.ToLower(strings.TrimSpace(s.stroke)) != "none" && s.strokeWidth > 0
+}
+
+func inheritedGeometryStyle(parent geometryStyle, attrs []xml.Attr) geometryStyle {
+	style := parent
+	attr := attrsByName(attrs)
+	if value := styleValue(attr["style"], "stroke"); value != "" {
+		style.stroke = value
+	}
+	if value := attr["stroke"]; value != "" {
+		style.stroke = value
+	}
+	if value := styleValue(attr["style"], "stroke-width"); value != "" {
+		style.strokeWidth = parseStrokeWidthOrDefault(value, style.strokeWidth)
+	}
+	if value := attr["stroke-width"]; value != "" {
+		style.strokeWidth = parseStrokeWidthOrDefault(value, style.strokeWidth)
+	}
+	return style
+}
+
+func parseStrokeWidthOrDefault(value string, fallback float64) float64 {
+	if lengthPattern.FindStringSubmatch(value) == nil {
+		return fallback
+	}
+	return parseSVGLengthPixels(value)
 }

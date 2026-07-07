@@ -14,7 +14,7 @@ import (
 const usage = `pre-print validates and repairs SVGs for print and web.
 
 Usage:
-  pre-print check [--target screen|paper|fabric|vinyl|20ft|4k] [--format terminal|md|html] FILE.svg
+  pre-print check [--target screen|paper|fabric|vinyl|20ft|4k] [--format terminal|md|html] [--overlay OUTPUT.svg] FILE.svg
   pre-print fix [--target TARGET] [--unsafe] [-o OUTPUT.svg] FILE.svg
 
 Commands:
@@ -47,6 +47,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	target := fs.String("target", "", "output material or estimated size, e.g. screen, paper, fabric, vinyl, 20ft, 4k")
 	format := fs.String("format", "terminal", "report format: terminal, md, or html")
+	overlay := fs.String("overlay", "", "write a visual SVG overlay highlighting locatable issues")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -64,6 +65,23 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	if err := writeReport(stdout, report, *format); err != nil {
 		fmt.Fprintf(stderr, "check failed: %v\n", err)
 		return 2
+	}
+	if *overlay != "" {
+		input, err := os.ReadFile(fs.Arg(0))
+		if err != nil {
+			fmt.Fprintf(stderr, "check failed: %v\n", err)
+			return 1
+		}
+		out, err := svgcheck.GenerateOverlay(input, svgcheck.OverlayOptions{Target: *target})
+		if err != nil {
+			fmt.Fprintf(stderr, "check failed: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(*overlay, out, 0o644); err != nil {
+			fmt.Fprintf(stderr, "check failed: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Wrote visual overlay: %s\n", *overlay)
 	}
 	if report.HasErrors() {
 		return 1

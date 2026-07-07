@@ -279,10 +279,12 @@ func TestTargetProfilesApplyOnlyRelevantProductionChecks(t *testing.T) {
 
 func TestNearDisconnectedLinesAreProductionOnly(t *testing.T) {
 	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
-		<path d="M 10 10 L 50 10" />
-		<path d="M 50.8 10 L 90 10" />
-		<polyline points="20,30 40,30 60,30" />
-		<line x1="60.7" y1="30" x2="80" y2="30" />
+		<g fill="none" stroke="#111111" stroke-width="4">
+			<path d="M 10 10 L 50 10" />
+			<path d="M 50.8 10 L 90 10" />
+			<polyline points="20,30 40,30 60,30" />
+			<line x1="60.7" y1="30" x2="80" y2="30" />
+		</g>
 	</svg>`)
 
 	for _, target := range []string{"paper", "20ft", "vinyl"} {
@@ -310,11 +312,34 @@ func TestNearDisconnectedLinesAreProductionOnly(t *testing.T) {
 	}
 }
 
+func TestNearDisconnectedLinesRequireVisualStrokeConnection(t *testing.T) {
+	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+		<g fill="none" stroke="#111111" stroke-width="0.25">
+			<path d="M 10 10 L 50 10" />
+			<path d="M 50.8 10 L 90 10" />
+		</g>
+		<g fill="none" stroke="#111111" stroke-width="4">
+			<path d="M 10 30 L 50 30" />
+			<path d="M 50.8 30 L 90 30" />
+		</g>
+	</svg>`)
+
+	report, err := Check(input, "paper")
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+	if hasIssueCode(report, "near-disconnected-lines") {
+		t.Fatalf("did not expect thin separated strokes or a single thick near-join to flag as constructed shape geometry: %#v", report.Issues)
+	}
+}
+
 func TestClosedShapesDoNotCountAsNearDisconnectedLines(t *testing.T) {
 	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
-		<path d="M 10 10 L 50 10 L 50 50 Z" />
-		<polygon points="10,70 50,70 50,90 10,90" />
-		<polyline points="70,70 90,70 70,70" />
+		<g fill="none" stroke="#111111" stroke-width="4">
+			<path d="M 10 10 L 50 10 L 50 50 Z" />
+			<polygon points="10,70 50,70 50,90 10,90" />
+			<polyline points="70,70 90,70 70,70" />
+		</g>
 	</svg>`)
 
 	report, err := Check(input, "paper")
@@ -323,6 +348,43 @@ func TestClosedShapesDoNotCountAsNearDisconnectedLines(t *testing.T) {
 	}
 	if hasIssueCode(report, "near-disconnected-lines") {
 		t.Fatalf("did not expect closed geometry to flag near-disconnected-lines: %#v", report.Issues)
+	}
+}
+
+func TestGenerateOverlayHighlightsLocatableIssues(t *testing.T) {
+	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+		<g fill="none" stroke="#111111" stroke-width="4">
+			<path d="M 10 10 L 50 10" />
+			<path d="M 50.8 10 L 90 10" />
+			<path d="M 90.8 10 L 10.8 10" />
+		</g>
+		<line x1="20" y1="50" x2="80" y2="50" stroke="#111111" stroke-width="0.2px" />
+	</svg>`)
+
+	overlay, err := GenerateOverlay(input, OverlayOptions{Target: "paper"})
+	if err != nil {
+		t.Fatalf("GenerateOverlay returned error: %v", err)
+	}
+	got := string(overlay)
+	for _, want := range []string{
+		`<svg xmlns="http://www.w3.org/2000/svg"`,
+		`id="pre-print-overlay"`,
+		`id="pre-print-near-disconnected-highlights"`,
+		`id="pre-print-thin-stroke-highlights"`,
+		`near-disconnected-lines`,
+		`thin-stroke`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected overlay to contain %q, got %s", want, got)
+		}
+	}
+
+	screenOverlay, err := GenerateOverlay(input, OverlayOptions{Target: "screen"})
+	if err != nil {
+		t.Fatalf("GenerateOverlay returned error: %v", err)
+	}
+	if strings.Contains(string(screenOverlay), `id="pre-print-near-disconnected-highlights"`) {
+		t.Fatalf("did not expect near-disconnected highlights for screen overlay: %s", string(screenOverlay))
 	}
 }
 
@@ -407,6 +469,11 @@ func TestGeneratedPrintEdgeCaseFixtures(t *testing.T) {
 			wantCodes: []string{"color-count", "many-fabric-colors"},
 		},
 		{
+			name:      "print-edge-near-disconnected-lines.svg",
+			target:    "paper",
+			wantCodes: []string{"near-disconnected-lines", "color-count", "rgb-colors-for-print"},
+		},
+		{
 			name:      "print-edge-stylized-fonts.svg",
 			target:    "vinyl",
 			wantCodes: []string{"external-reference", "text-not-outlined"},
@@ -488,6 +555,7 @@ func coveredFixtureNames() map[string]struct{} {
 		"print-edge-cmyk-colors.svg",
 		"print-edge-effects.svg",
 		"print-edge-many-colors.svg",
+		"print-edge-near-disconnected-lines.svg",
 		"print-edge-stylized-fonts.svg",
 		"print-edge-thin-lines.svg",
 	}
