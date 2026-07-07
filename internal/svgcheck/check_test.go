@@ -394,6 +394,40 @@ func TestGenerateOverlayHighlightsLocatableIssues(t *testing.T) {
 	}
 }
 
+func TestBleedAndSafeAreaRecommendations(t *testing.T) {
+	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="4in" height="3in" viewBox="0 0 384 288">
+		<rect width="384" height="288" fill="#f8fafc"/>
+		<text x="4" y="26" font-size="18" fill="#111111">Edge</text>
+		<circle cx="360" cy="144" r="8" fill="#ef4444"/>
+	</svg>`)
+
+	report, err := Check(input, "paper")
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+
+	assertIssueMessageContains(t, report, "missing-bleed", "Bleed:", "trim edge", "0.125in/3mm")
+	assertIssueMessageContains(t, report, "safe-area-risk", "Safe area:", "2 non-background elements", "printer template")
+}
+
+func TestBleedAllowsExplicitOverhang(t *testing.T) {
+	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="4in" height="3in" viewBox="0 0 384 288">
+		<rect x="-14" y="-14" width="412" height="316" fill="#f8fafc"/>
+		<text x="96" y="150" font-size="18" fill="#111111">Centered</text>
+	</svg>`)
+
+	report, err := Check(input, "paper")
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+	if hasIssueCode(report, "missing-bleed") {
+		t.Fatalf("did not expect missing-bleed when background extends past the trim edge: %#v", report.Issues)
+	}
+	if hasIssueCode(report, "safe-area-risk") {
+		t.Fatalf("did not expect safe-area-risk for centered content: %#v", report.Issues)
+	}
+}
+
 func TestDetailedProductionRecommendations(t *testing.T) {
 	var smallShapes strings.Builder
 	for i := 0; i < 80; i++ {

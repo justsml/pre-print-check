@@ -72,6 +72,8 @@ type SVGMeta struct {
 	SubtleEffects          int
 	LargeShadows           int
 	BackgroundTransparency int
+	MissingBleedShapes     int
+	SafeAreaRiskShapes     int
 	ColorValues            int
 	UniqueColors           int
 	CMYKColors             int
@@ -99,6 +101,7 @@ type issueProfile struct {
 	ReviewEffects             bool
 	ReviewThinStrokes         bool
 	ReviewDisconnectedJoins   bool
+	ReviewBleed               bool
 	ReviewFabricColorCount    bool
 	RequirePureVectorGeometry bool
 }
@@ -232,6 +235,12 @@ func (r *Report) addTargetIssues() {
 	if r.Meta.BackgroundTransparency > 0 && (profile.RequirePrintColors || r.Target.WidthInches > 0) {
 		r.addRankedIssue(SeverityWarning, "background-transparency", fmt.Sprintf("%s detected; flatten against the intended substrate or add an explicit opaque background before production proofing", plural(r.Meta.BackgroundTransparency, "background transparency issue", "background transparency issues")), RankModerate)
 	}
+	if r.Meta.MissingBleedShapes > 0 && profile.ReviewBleed {
+		r.addRankedIssue(SeverityWarning, "missing-bleed", missingBleedMessage(r.Meta, r.Target), RankModerate)
+	}
+	if r.Meta.SafeAreaRiskShapes > 0 && profile.ReviewBleed {
+		r.addRankedIssue(SeverityWarning, "safe-area-risk", safeAreaMessage(r.Meta, r.Target), rankSafeAreaRisk(r.Meta.SafeAreaRiskShapes))
+	}
 
 	if r.Target.Material != "" {
 		r.addMaterialIssues(profile)
@@ -319,6 +328,7 @@ func issueProfileForTarget(target Target) issueProfile {
 		ReviewEffects:           target.Raw == "" || target.WidthInches > 0,
 		ReviewThinStrokes:       target.WidthInches > 0,
 		ReviewDisconnectedJoins: target.WidthInches > 0,
+		ReviewBleed:             target.WidthInches > 0,
 	}
 
 	switch target.Material {
@@ -336,6 +346,7 @@ func issueProfileForTarget(target Target) issueProfile {
 		profile.ReviewEffects = true
 		profile.ReviewThinStrokes = true
 		profile.ReviewDisconnectedJoins = true
+		profile.ReviewBleed = true
 	case MaterialPackaging:
 		profile.ReviewArtworkComplexity = true
 		profile.ReviewRasterResolution = true
@@ -346,6 +357,7 @@ func issueProfileForTarget(target Target) issueProfile {
 		profile.ReviewEffects = true
 		profile.ReviewThinStrokes = true
 		profile.ReviewDisconnectedJoins = true
+		profile.ReviewBleed = true
 	case MaterialFabric:
 		profile.ReviewArtworkComplexity = true
 		profile.ReviewRasterResolution = true
@@ -353,6 +365,7 @@ func issueProfileForTarget(target Target) issueProfile {
 		profile.ReviewEffects = true
 		profile.ReviewThinStrokes = true
 		profile.ReviewDisconnectedJoins = true
+		profile.ReviewBleed = true
 		profile.ReviewFabricColorCount = true
 	case MaterialBanner, MaterialSignage, MaterialVehicleWrap:
 		profile.ReviewArtworkComplexity = true
@@ -361,6 +374,7 @@ func issueProfileForTarget(target Target) issueProfile {
 		profile.ReviewEffects = true
 		profile.ReviewThinStrokes = true
 		profile.ReviewDisconnectedJoins = true
+		profile.ReviewBleed = true
 	case MaterialVinyl, MaterialLaser, MaterialCNC, MaterialPlotter:
 		profile.ReviewArtworkComplexity = true
 		profile.ReviewRasterResolution = true
@@ -369,6 +383,9 @@ func issueProfileForTarget(target Target) issueProfile {
 		profile.ReviewThinStrokes = true
 		profile.ReviewDisconnectedJoins = true
 		profile.RequirePureVectorGeometry = true
+		if target.Material == MaterialVinyl {
+			profile.ReviewBleed = true
+		}
 	}
 
 	return profile
@@ -578,6 +595,7 @@ func enrichProductionDetails(input []byte, target Target, meta *SVGMeta) {
 	}
 	meta.TextShapeOverlaps = textPolygonOverlaps(texts, polygons)
 	meta.SubtleEffects = subtleEffectCount(*meta)
+	meta.MissingBleedShapes, meta.SafeAreaRiskShapes = bleedAndSafeAreaRisks(*meta, target, shapes, texts)
 }
 
 type textCapture struct {
@@ -727,6 +745,101 @@ func textPolygonOverlaps(texts []roughText, polygons []roughShape) []TextShapeOv
 	return overlaps
 }
 
+func bleedAndSafeAreaRisks(meta SVGMeta, target Target, shapes []roughShape, texts []roughText) (missingBleedShapes, safeAreaRiskShapes int) {
+	if len(shapes) == 0 && len(texts) == 0 {
+		return 0, 0
+	}
+	minX, minY, width, height := parseViewBoxOrDefault(overlayViewBox(meta))
+	if width <= 0 || height <= 0 {
+		return 0, 0
+	}
+	canvas := box{x1: minX, y1: minY, x2: minX + width, y2: minY + height}
+	bleedMargin, safeMargin := productionMarginsInSVGUnits(meta, target, width, height)
+	tolerance := mathMax(width, height) * 0.001
+	if tolerance < 0.01 {
+		tolerance = 0.01
+	}
+
+	for _, shape := range shapes {
+		if boxIsEmpty(shape.box) {
+			continue
+		}
+		background := backgroundLikeShape(shape, canvas, tolerance)
+		if background && boxTouchesCanvasEdge(shape.box, canvas, tolerance) && !boxExtendsBeyondCanvas(shape.box, canvas, bleedMargin*0.5) {
+			missingBleedShapes++
+		}
+		if !background && boxInsideCanvas(shape.box, canvas, tolerance) && boxNearCanvasEdge(shape.box, canvas, safeMargin) {
+			safeAreaRiskShapes++
+		}
+	}
+
+	for _, text := range texts {
+		if boxIsEmpty(text.box) {
+			continue
+		}
+		if boxInsideCanvas(text.box, canvas, tolerance) && boxNearCanvasEdge(text.box, canvas, safeMargin) {
+			safeAreaRiskShapes++
+		}
+	}
+
+	return missingBleedShapes, safeAreaRiskShapes
+}
+
+func productionMarginsInSVGUnits(meta SVGMeta, target Target, canvasWidth, canvasHeight float64) (bleedMargin, safeMargin float64) {
+	const (
+		commonBleedMM = 3.0
+		commonSafeMM  = 5.0
+	)
+	if mmPerUnit := physicalMMPerSVGUnit(meta, target); mmPerUnit > 0 {
+		return commonBleedMM / mmPerUnit, commonSafeMM / mmPerUnit
+	}
+	shortSide := math.Min(canvasWidth, canvasHeight)
+	return shortSide * 0.025, shortSide * 0.04
+}
+
+func backgroundLikeShape(shape roughShape, canvas box, tolerance float64) bool {
+	switch shape.kind {
+	case "rect", "path", "polygon":
+	default:
+		return false
+	}
+	coverageWidth := shape.box.width() >= canvas.width()*0.9
+	coverageHeight := shape.box.height() >= canvas.height()*0.9
+	return coverageWidth && coverageHeight && boxTouchesCanvasEdge(shape.box, canvas, tolerance)
+}
+
+func boxTouchesCanvasEdge(b, canvas box, tolerance float64) bool {
+	return math.Abs(b.x1-canvas.x1) <= tolerance ||
+		math.Abs(b.y1-canvas.y1) <= tolerance ||
+		math.Abs(b.x2-canvas.x2) <= tolerance ||
+		math.Abs(b.y2-canvas.y2) <= tolerance
+}
+
+func boxExtendsBeyondCanvas(b, canvas box, minimum float64) bool {
+	return b.x1 <= canvas.x1-minimum ||
+		b.y1 <= canvas.y1-minimum ||
+		b.x2 >= canvas.x2+minimum ||
+		b.y2 >= canvas.y2+minimum
+}
+
+func boxNearCanvasEdge(b, canvas box, margin float64) bool {
+	return b.x1-canvas.x1 < margin ||
+		b.y1-canvas.y1 < margin ||
+		canvas.x2-b.x2 < margin ||
+		canvas.y2-b.y2 < margin
+}
+
+func boxInsideCanvas(b, canvas box, tolerance float64) bool {
+	return b.x1 >= canvas.x1-tolerance &&
+		b.y1 >= canvas.y1-tolerance &&
+		b.x2 <= canvas.x2+tolerance &&
+		b.y2 <= canvas.y2+tolerance
+}
+
+func boxIsEmpty(b box) bool {
+	return b.width() == 0 && b.height() == 0
+}
+
 func physicalMMPerSVGUnit(meta SVGMeta, target Target) float64 {
 	if meta.WidthPixels <= 0 {
 		return 0
@@ -831,6 +944,25 @@ func textOverlapMessage(overlap TextShapeOverlap, meta SVGMeta) string {
 
 func smallDetailMessage(meta SVGMeta, target Target) string {
 	return fmt.Sprintf("Durability: design features many small elements: %s and %s%s. Such precise transfers can limit material choices; simplify tiny islands, enlarge detail, or choose a production method/material that can hold fine features", plural(meta.SmallShapesSub1MM, "sub-1mm shape", "sub-1mm shapes"), plural(meta.SmallShapesSub2MM, "sub-2mm shape", "sub-2mm shapes"), targetPhrase(target))
+}
+
+func missingBleedMessage(meta SVGMeta, target Target) string {
+	return fmt.Sprintf("Bleed: %s reach the trim edge but do not extend beyond it%s. Add the printer-required bleed, commonly 0.125in/3mm, or confirm this is not intended as full-bleed artwork", plural(meta.MissingBleedShapes, "background/edge element", "background/edge elements"), targetPhrase(target))
+}
+
+func safeAreaMessage(meta SVGMeta, target Target) string {
+	return fmt.Sprintf("Safe area: %s sit close to the trim edge%s. Keep text, logos, and critical detail inside the printer template's safe area, or intentionally extend background art past bleed", plural(meta.SafeAreaRiskShapes, "non-background element", "non-background elements"), targetPhrase(target))
+}
+
+func rankSafeAreaRisk(count int) FindingRank {
+	switch {
+	case count >= 10:
+		return RankHigh
+	case count >= 3:
+		return RankModerate
+	default:
+		return RankLow
+	}
 }
 
 func rankSmallDetails(sub1MM, sub2MM int) FindingRank {
