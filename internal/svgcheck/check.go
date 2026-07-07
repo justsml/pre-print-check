@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"regexp"
 	"strconv"
@@ -63,6 +64,7 @@ type SVGMeta struct {
 	Opacity            int
 	BlendModes         int
 	ThinStrokes        int
+	NearDisconnected   int
 	ColorValues        int
 	UniqueColors       int
 	CMYKColors         int
@@ -78,6 +80,7 @@ type issueProfile struct {
 	RequireFlattenedEffects   bool
 	ReviewEffects             bool
 	ReviewThinStrokes         bool
+	ReviewDisconnectedJoins   bool
 	ReviewFabricColorCount    bool
 	RequirePureVectorGeometry bool
 }
@@ -196,6 +199,9 @@ func (r *Report) addTargetIssues() {
 	if r.Meta.ThinStrokes > 0 && profile.ReviewThinStrokes {
 		r.addRankedIssue(SeverityWarning, "thin-stroke", "SVG contains very thin strokes that may disappear, break up, or image unpredictably in print production", RankModerate)
 	}
+	if r.Meta.NearDisconnected > 0 && profile.ReviewDisconnectedJoins {
+		r.addRankedIssue(SeverityWarning, "near-disconnected-lines", "SVG has open line/path endpoints that nearly touch; join or close them if they are meant to read as one contiguous shape at production scale", rankNearDisconnected(r.Meta.NearDisconnected))
+	}
 
 	if r.Target.Material != "" {
 		r.addMaterialIssues(profile)
@@ -282,6 +288,7 @@ func issueProfileForTarget(target Target) issueProfile {
 		WarnExternalReferences:  target.Raw == "" || target.WidthInches > 0,
 		ReviewEffects:           target.Raw == "" || target.WidthInches > 0,
 		ReviewThinStrokes:       target.WidthInches > 0,
+		ReviewDisconnectedJoins: target.WidthInches > 0,
 	}
 
 	switch target.Material {
@@ -298,6 +305,7 @@ func issueProfileForTarget(target Target) issueProfile {
 		profile.RequireFlattenedEffects = true
 		profile.ReviewEffects = true
 		profile.ReviewThinStrokes = true
+		profile.ReviewDisconnectedJoins = true
 	case MaterialPackaging:
 		profile.ReviewArtworkComplexity = true
 		profile.ReviewRasterResolution = true
@@ -307,12 +315,14 @@ func issueProfileForTarget(target Target) issueProfile {
 		profile.RequireFlattenedEffects = true
 		profile.ReviewEffects = true
 		profile.ReviewThinStrokes = true
+		profile.ReviewDisconnectedJoins = true
 	case MaterialFabric:
 		profile.ReviewArtworkComplexity = true
 		profile.ReviewRasterResolution = true
 		profile.WarnExternalReferences = true
 		profile.ReviewEffects = true
 		profile.ReviewThinStrokes = true
+		profile.ReviewDisconnectedJoins = true
 		profile.ReviewFabricColorCount = true
 	case MaterialBanner, MaterialSignage, MaterialVehicleWrap:
 		profile.ReviewArtworkComplexity = true
@@ -320,12 +330,14 @@ func issueProfileForTarget(target Target) issueProfile {
 		profile.WarnExternalReferences = true
 		profile.ReviewEffects = true
 		profile.ReviewThinStrokes = true
+		profile.ReviewDisconnectedJoins = true
 	case MaterialVinyl, MaterialLaser, MaterialCNC, MaterialPlotter:
 		profile.ReviewArtworkComplexity = true
 		profile.ReviewRasterResolution = true
 		profile.WarnExternalReferences = true
 		profile.ReviewEffects = true
 		profile.ReviewThinStrokes = true
+		profile.ReviewDisconnectedJoins = true
 		profile.RequirePureVectorGeometry = true
 	}
 
@@ -348,6 +360,8 @@ func (r *Report) addRankedIssue(severity Severity, code, message string, rank Fi
 func inspect(input []byte) (SVGMeta, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(input))
 	meta := SVGMeta{}
+	endpoints := []geometryEndpoint{}
+	geometrySource := 0
 
 	for {
 		token, err := decoder.Token()
@@ -400,6 +414,7 @@ func inspect(input []byte) (SVGMeta, error) {
 			case "clippath":
 				meta.ClipPaths++
 			}
+			endpoints = append(endpoints, endpointsFromElement(name, tok.Attr, &geometrySource)...)
 
 			for _, attr := range tok.Attr {
 				attrName := strings.ToLower(attr.Name.Local)
@@ -426,6 +441,7 @@ func inspect(input []byte) (SVGMeta, error) {
 		return meta, fmt.Errorf("no root <svg> element found")
 	}
 	meta.UniqueColors = len(colorSetFrom(input))
+	meta.NearDisconnected = countNearDisconnectedEndpoints(endpoints)
 	return meta, nil
 }
 
@@ -612,4 +628,290 @@ func rankColorCount(count int) FindingRank {
 	default:
 		return RankLow
 	}
+}
+
+func rankNearDisconnected(count int) FindingRank {
+	switch {
+	case count >= 6:
+		return RankHigh
+	case count >= 3:
+		return RankModerate
+	default:
+		return RankLow
+	}
+}
+
+type geometryEndpoint struct {
+	x, y   float64
+	source int
+}
+
+func endpointsFromElement(name string, attrs []xml.Attr, sourceCounter *int) []geometryEndpoint {
+	attr := attrsByName(attrs)
+	switch name {
+	case "line":
+		x1, ok1 := parseCoordinate(attr["x1"])
+		y1, ok2 := parseCoordinate(attr["y1"])
+		x2, ok3 := parseCoordinate(attr["x2"])
+		y2, ok4 := parseCoordinate(attr["y2"])
+		if ok1 && ok2 && ok3 && ok4 {
+			source := nextGeometrySource(sourceCounter)
+			return []geometryEndpoint{{x: x1, y: y1, source: source}, {x: x2, y: y2, source: source}}
+		}
+	case "polyline":
+		return endpointsFromPointList(attr["points"], false, sourceCounter)
+	case "polygon":
+		return endpointsFromPointList(attr["points"], true, sourceCounter)
+	case "path":
+		return endpointsFromPathData(attr["d"], sourceCounter)
+	}
+	return nil
+}
+
+func nextGeometrySource(sourceCounter *int) int {
+	(*sourceCounter)++
+	return *sourceCounter
+}
+
+func attrsByName(attrs []xml.Attr) map[string]string {
+	out := map[string]string{}
+	for _, attr := range attrs {
+		out[strings.ToLower(attr.Name.Local)] = attr.Value
+	}
+	return out
+}
+
+func parseCoordinate(value string) (float64, bool) {
+	if lengthPattern.FindStringSubmatch(value) == nil {
+		return 0, false
+	}
+	return parseSVGLengthPixels(value), true
+}
+
+func endpointsFromPointList(points string, closed bool, sourceCounter *int) []geometryEndpoint {
+	values := pathNumberPattern.FindAllString(points, -1)
+	if len(values) < 4 || len(values)%2 != 0 {
+		return nil
+	}
+	first, okFirst := pointFromNumberStrings(values[0], values[1])
+	last, okLast := pointFromNumberStrings(values[len(values)-2], values[len(values)-1])
+	if !okFirst || !okLast {
+		return nil
+	}
+	if closed || pointsNearlyEqual(first, last, connectedEndpointTolerance) {
+		return nil
+	}
+	source := nextGeometrySource(sourceCounter)
+	first.source = source
+	last.source = source
+	return []geometryEndpoint{first, last}
+}
+
+var pathNumberPattern = regexp.MustCompile(`[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?`)
+var pathTokenPattern = regexp.MustCompile(`[AaCcHhLlMmQqSsTtVvZz]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?`)
+
+func endpointsFromPathData(data string, sourceCounter *int) []geometryEndpoint {
+	tokens := pathTokenPattern.FindAllString(data, -1)
+	if len(tokens) == 0 {
+		return nil
+	}
+
+	var endpoints []geometryEndpoint
+	var cmd byte
+	var cur, subpathStart geometryEndpoint
+	var subpathSource int
+	var subpathOpen bool
+	var subpathStartSet bool
+
+	for i := 0; i < len(tokens); {
+		if isPathCommand(tokens[i]) {
+			cmd = tokens[i][0]
+			i++
+			if cmd == 'Z' || cmd == 'z' {
+				subpathOpen = false
+				cur = subpathStart
+				continue
+			}
+		}
+		if cmd == 0 {
+			break
+		}
+
+		switch cmd {
+		case 'M', 'm':
+			if subpathOpen {
+				subpathStart.source = subpathSource
+				cur.source = subpathSource
+				endpoints = append(endpoints, subpathStart, cur)
+			}
+			if i+1 >= len(tokens) {
+				return endpoints
+			}
+			x, y, ok := parsePathPair(tokens[i], tokens[i+1])
+			if !ok {
+				return endpoints
+			}
+			if cmd == 'm' && subpathStartSet {
+				x += cur.x
+				y += cur.y
+			}
+			cur = geometryEndpoint{x: x, y: y}
+			subpathStart = cur
+			subpathSource = nextGeometrySource(sourceCounter)
+			subpathOpen = true
+			subpathStartSet = true
+			i += 2
+			if cmd == 'M' {
+				cmd = 'L'
+			} else {
+				cmd = 'l'
+			}
+		case 'L', 'l', 'T', 't':
+			if i+1 >= len(tokens) {
+				return endpoints
+			}
+			x, y, ok := parsePathPair(tokens[i], tokens[i+1])
+			if !ok {
+				return endpoints
+			}
+			if isRelativePathCommand(cmd) {
+				x += cur.x
+				y += cur.y
+			}
+			cur = geometryEndpoint{x: x, y: y}
+			i += 2
+		case 'H', 'h':
+			if i >= len(tokens) {
+				return endpoints
+			}
+			x, ok := parsePathNumber(tokens[i])
+			if !ok {
+				return endpoints
+			}
+			if isRelativePathCommand(cmd) {
+				x += cur.x
+			}
+			cur.x = x
+			i++
+		case 'V', 'v':
+			if i >= len(tokens) {
+				return endpoints
+			}
+			y, ok := parsePathNumber(tokens[i])
+			if !ok {
+				return endpoints
+			}
+			if isRelativePathCommand(cmd) {
+				y += cur.y
+			}
+			cur.y = y
+			i++
+		case 'C', 'c':
+			if i+5 >= len(tokens) {
+				return endpoints
+			}
+			x, y, ok := parsePathPair(tokens[i+4], tokens[i+5])
+			if !ok {
+				return endpoints
+			}
+			if isRelativePathCommand(cmd) {
+				x += cur.x
+				y += cur.y
+			}
+			cur = geometryEndpoint{x: x, y: y}
+			i += 6
+		case 'S', 's', 'Q', 'q':
+			if i+3 >= len(tokens) {
+				return endpoints
+			}
+			x, y, ok := parsePathPair(tokens[i+2], tokens[i+3])
+			if !ok {
+				return endpoints
+			}
+			if isRelativePathCommand(cmd) {
+				x += cur.x
+				y += cur.y
+			}
+			cur = geometryEndpoint{x: x, y: y}
+			i += 4
+		case 'A', 'a':
+			if i+6 >= len(tokens) {
+				return endpoints
+			}
+			x, y, ok := parsePathPair(tokens[i+5], tokens[i+6])
+			if !ok {
+				return endpoints
+			}
+			if isRelativePathCommand(cmd) {
+				x += cur.x
+				y += cur.y
+			}
+			cur = geometryEndpoint{x: x, y: y}
+			i += 7
+		default:
+			return endpoints
+		}
+	}
+
+	if subpathOpen {
+		subpathStart.source = subpathSource
+		cur.source = subpathSource
+		endpoints = append(endpoints, subpathStart, cur)
+	}
+	return endpoints
+}
+
+func pointFromNumberStrings(xValue, yValue string) (geometryEndpoint, bool) {
+	x, okX := parsePathNumber(xValue)
+	y, okY := parsePathNumber(yValue)
+	return geometryEndpoint{x: x, y: y}, okX && okY
+}
+
+func parsePathPair(xValue, yValue string) (float64, float64, bool) {
+	x, okX := parsePathNumber(xValue)
+	y, okY := parsePathNumber(yValue)
+	return x, y, okX && okY
+}
+
+func parsePathNumber(value string) (float64, bool) {
+	n, err := strconv.ParseFloat(value, 64)
+	return n, err == nil
+}
+
+func isPathCommand(value string) bool {
+	return len(value) == 1 && strings.ContainsAny(value, "AaCcHhLlMmQqSsTtVvZz")
+}
+
+func isRelativePathCommand(cmd byte) bool {
+	return cmd >= 'a' && cmd <= 'z'
+}
+
+const (
+	connectedEndpointTolerance = 0.01
+	nearEndpointMinDistance    = 0.05
+	nearEndpointMaxDistance    = 2.0
+)
+
+func countNearDisconnectedEndpoints(endpoints []geometryEndpoint) int {
+	count := 0
+	for i := 0; i < len(endpoints); i++ {
+		for j := i + 1; j < len(endpoints); j++ {
+			if endpoints[i].source == endpoints[j].source {
+				continue
+			}
+			distance := endpointDistance(endpoints[i], endpoints[j])
+			if distance >= nearEndpointMinDistance && distance <= nearEndpointMaxDistance {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func endpointDistance(a, b geometryEndpoint) float64 {
+	return math.Hypot(a.x-b.x, a.y-b.y)
+}
+
+func pointsNearlyEqual(a, b geometryEndpoint, tolerance float64) bool {
+	return endpointDistance(a, b) <= tolerance
 }

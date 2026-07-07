@@ -277,6 +277,55 @@ func TestTargetProfilesApplyOnlyRelevantProductionChecks(t *testing.T) {
 	}
 }
 
+func TestNearDisconnectedLinesAreProductionOnly(t *testing.T) {
+	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+		<path d="M 10 10 L 50 10" />
+		<path d="M 50.8 10 L 90 10" />
+		<polyline points="20,30 40,30 60,30" />
+		<line x1="60.7" y1="30" x2="80" y2="30" />
+	</svg>`)
+
+	for _, target := range []string{"paper", "20ft", "vinyl"} {
+		t.Run(target, func(t *testing.T) {
+			report, err := Check(input, target)
+			if err != nil {
+				t.Fatalf("Check returned error: %v", err)
+			}
+			issue := issueByCode(report, "near-disconnected-lines")
+			if issue == nil {
+				t.Fatalf("expected near-disconnected-lines in %#v", report.Issues)
+			}
+			if issue.Rank != RankLow {
+				t.Fatalf("near-disconnected-lines rank = %q, want %q", issue.Rank, RankLow)
+			}
+		})
+	}
+
+	screenReport, err := Check(input, "screen")
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+	if hasIssueCode(screenReport, "near-disconnected-lines") {
+		t.Fatalf("did not expect near-disconnected-lines for screen output: %#v", screenReport.Issues)
+	}
+}
+
+func TestClosedShapesDoNotCountAsNearDisconnectedLines(t *testing.T) {
+	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+		<path d="M 10 10 L 50 10 L 50 50 Z" />
+		<polygon points="10,70 50,70 50,90 10,90" />
+		<polyline points="70,70 90,70 70,70" />
+	</svg>`)
+
+	report, err := Check(input, "paper")
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+	if hasIssueCode(report, "near-disconnected-lines") {
+		t.Fatalf("did not expect closed geometry to flag near-disconnected-lines: %#v", report.Issues)
+	}
+}
+
 func TestDownloadedFixtureCoverage(t *testing.T) {
 	tests := []struct {
 		name      string
