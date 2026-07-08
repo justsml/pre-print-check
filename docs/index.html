@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pre-print — SVG preflight</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23f3f1ec'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%23b3401e' stroke-width='1.5'/%3E%3Cpath d='M16 4v6M16 22v6M4 16h6M22 16h6' stroke='%23b3401e' stroke-width='1.5'/%3E%3Ccircle cx='16' cy='16' r='1.6' fill='%23b3401e'/%3E%3C/svg%3E" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        corePlugins: { preflight: false },
+      };
+    </script>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script src="../dist/wasm_exec.js"></script>
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <div class="page">
+      <header class="masthead">
+        <div class="masthead-row">
+          <a class="wordmark" href="#">
+            <span class="wordmark-glyph" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22">
+                <circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="1.25" />
+                <path d="M12 2v5M12 17v5M2 12h5M17 12h5" stroke="currentColor" stroke-width="1.25" />
+                <circle cx="12" cy="12" r="1.25" fill="currentColor" />
+              </svg>
+            </span>
+            <span class="wordmark-text">pre&#8209;print<sup>&middot;</sup></span>
+            <span class="wordmark-sub" id="summaryLine">preflight &amp; repair for SVG art</span>
+          </a>
+
+          <div class="masthead-meta">
+            <span id="runtimeStatus" class="status-pill">
+              <span class="status-dot"></span>
+              Starting
+            </span>
+            <a class="link-quiet" href="../README.md" title="Open README" aria-label="Open README">
+              README
+            </a>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <input id="fileInput" type="file" accept=".svg,image/svg+xml" class="sr-only" />
+          <label for="fileInput" class="command-button command-button--ghost">
+            <i data-lucide="folder-open" class="h-4 w-4"></i>
+            Open SVG
+          </label>
+
+          <label class="field field--grow">
+            <span>Sample</span>
+            <select id="sampleSelect">
+              <option value="">None</option>
+              <option value="../internal/svgcheck/testdata/print-edge-near-disconnected-lines.svg">Near disconnected lines</option>
+              <option value="../internal/svgcheck/testdata/print-edge-thin-lines.svg">Thin print lines</option>
+              <option value="../internal/svgcheck/testdata/print-edge-effects.svg">Effects and shadows</option>
+              <option value="../internal/svgcheck/testdata/print-edge-stylized-fonts.svg">Stylized fonts</option>
+              <option value="../internal/svgcheck/testdata/code-example.svg">Code example</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Target</span>
+            <select id="targetSelect">
+              <option value="paper">Paper</option>
+              <option value="vinyl">Vinyl</option>
+              <option value="fabric@14in">Fabric 14in</option>
+              <option value="banner@20ft">Banner 20ft</option>
+              <option value="screen">Screen</option>
+              <option value="packaging">Packaging</option>
+              <option value="laser">Laser</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+
+          <label id="customTargetWrap" class="field field--hidden">
+            <span>Size</span>
+            <input id="customTarget" type="text" placeholder="20ft" />
+          </label>
+
+          <label class="toggle" title="Allow fixes flagged as unsafe">
+            <input id="unsafeToggle" type="checkbox" />
+            <span></span>
+            Unsafe
+          </label>
+
+          <span class="toolbar-rule" aria-hidden="true"></span>
+
+          <button id="analyzeButton" class="command-button command-button--primary">
+            <i data-lucide="search-check" class="h-4 w-4"></i>
+            Analyze
+          </button>
+          <button id="fixSafeButton" class="command-button command-button--ghost">
+            <i data-lucide="wrench" class="h-4 w-4"></i>
+            Fix safe
+          </button>
+          <button id="downloadSvgButton" class="icon-button" title="Download current SVG" aria-label="Download current SVG">
+            <i data-lucide="download" class="h-4 w-4"></i>
+          </button>
+          <button id="downloadOverlayButton" class="icon-button" title="Download overlay SVG" aria-label="Download overlay SVG">
+            <i data-lucide="layers" class="h-4 w-4"></i>
+          </button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="workspace-panel">
+          <div class="view-head">
+            <div class="segmented" role="tablist" aria-label="Preview mode">
+              <button class="active" data-view="original" role="tab">Original</button>
+              <button data-view="overlay" role="tab">Overlay</button>
+              <button data-view="source" role="tab">Source</button>
+            </div>
+            <div id="fileName" class="file-tag">no file</div>
+          </div>
+
+          <div id="visualPane" class="visual-pane">
+            <img id="svgPreview" alt="SVG preview" />
+            <div id="emptyVisual" class="empty-state">
+              <svg viewBox="0 0 48 48" width="40" height="40" aria-hidden="true">
+                <rect x="6" y="10" width="36" height="28" rx="1" fill="none" stroke="currentColor" stroke-width="1.25" />
+                <path d="M16 10v28M32 10v28M6 20h36M6 28h36" stroke="currentColor" stroke-width="0.6" opacity="0.55" />
+              </svg>
+              <span>Drop or open an SVG to begin</span>
+            </div>
+          </div>
+
+          <textarea
+            id="sourceInput"
+            spellcheck="false"
+            class="source-editor hidden"
+            placeholder="<svg ...></svg>"
+          ></textarea>
+        </section>
+
+        <aside class="sidebar">
+          <section class="summary-panel panel">
+            <header class="panel-head">
+              <p class="panel-eyebrow">Summary</p>
+              <h2 id="reportSummary" class="panel-title">Ready</h2>
+            </header>
+
+            <div class="counter-row">
+              <div class="counter counter--err">
+                <strong id="errorCount">0</strong>
+                <span>errors</span>
+              </div>
+              <div class="counter counter--warn">
+                <strong id="warningCount">0</strong>
+                <span>warnings</span>
+              </div>
+              <div class="counter counter--info">
+                <strong id="infoCount">0</strong>
+                <span>info</span>
+              </div>
+            </div>
+
+            <dl id="metaGrid" class="meta-grid"></dl>
+          </section>
+
+          <section class="issues-panel panel">
+            <header class="panel-head panel-head--row">
+              <h2 class="panel-title">Issues</h2>
+              <button id="applyReportFixesButton" class="command-button command-button--ghost command-button--sm">
+                <i data-lucide="list-checks" class="h-3.5 w-3.5"></i>
+                Apply shown
+              </button>
+            </header>
+            <div id="issuesList" class="issues-list"></div>
+          </section>
+
+          <section class="activity-panel panel">
+            <header class="panel-head panel-head--row">
+              <h2 class="panel-title">Activity</h2>
+              <button id="clearLogButton" class="icon-button icon-button--sm" title="Clear activity" aria-label="Clear activity">
+                <i data-lucide="trash-2" class="h-3.5 w-3.5"></i>
+              </button>
+            </header>
+            <div id="activityLog" class="activity-log"></div>
+          </section>
+        </aside>
+      </main>
+
+      <footer class="footnote">
+        <span>pre&#8209;print tools &middot; runs locally in WASM &middot; your SVG never leaves the browser</span>
+      </footer>
+    </div>
+  </body>
+</html>
