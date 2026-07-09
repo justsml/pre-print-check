@@ -1,0 +1,42 @@
+{
+  "name": "pre-print-check",
+  "version": "0.1.0",
+  "description": "Local SVG preflight and repair for print, cutters, engraving, large-format, and web workflows.",
+  "type": "module",
+  "main": "./npm/index.cjs",
+  "module": "./npm/index.js",
+  "types": "./npm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./npm/index.d.ts",
+      "import": "./npm/index.js",
+      "require": "./npm/index.cjs"
+    },
+    "./pre-print.wasm": "./dist/pre-print.wasm",
+    "./wasm_exec.js": "./dist/wasm_exec.js"
+  },
+  "files": [
+    "dist/pre-print.wasm",
+    "dist/wasm_exec.js",
+    "npm/index.cjs",
+    "npm/index.d.ts",
+    "npm/index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "make wasm",
+    "test": "npm run build && node npm/smoke-test.mjs",
+    "prepack": "npm run build",
+    "release": "npm publish --access=public"
+  },
+  "keywords": [
+    "svg",
+    "preflight",
+    "print",
+    "wasm",
+    "vinyl",
+    "laser",
+    "cutter"
+  ],
+  "author": "Dan"
+}
