@@ -54,25 +54,89 @@ Likely issue codes: `low-raster-ppi`, `modest-raster-ppi`, `unknown-raster-size`
 
 Problem: live SVG text can substitute, reflow, disappear, or violate font handoff rules outside the authoring environment.
 
-Initial shape:
+Owner: Text Color Agent, `gpt-5.5`, high thinking. Keep this work inside text and font inspection; do not take on PDF export, general transparency mapping, or cutter path geometry.
 
-- Detect `<text>`, `<tspan>`, `font-family`, `@font-face`, external font URLs, and embedded font data.
-- Warn on live text for press-like targets and error or warn more strongly for cutter-like targets.
-- Distinguish "text exists" from "font dependency exists" so reports are actionable.
+CLI/API surface:
 
-Likely issue codes: `live-text-for-print`, `font-family-dependency`, `external-font-reference`, `embedded-font-data`.
+- Extend existing `pre-print check --target ... FILE.svg`; no new flag is needed for v1.
+- Keep `fix --fix typography` advisory-only. Do not outline text automatically.
+- Extend `svgcheck.SVGMeta` with counts such as `TSpanElements`, `TextPathElements`, `FontFamilies`, `FontFaceRules`, `ExternalFontRefs`, and `EmbeddedFontData`.
+- Mirror key counts into the WASM API metadata.
+- Add a terminal/Markdown/HTML "Typography signals" summary when nonzero.
+
+Implementation sketch:
+
+- Extend `inspect` in `internal/svgcheck/check.go` to count `<tspan>`, `<textPath>`, and typography attributes.
+- Parse direct attributes and inline `style` declarations for `font-family`, `font-size`, `font-weight`, `font-style`, and `font-stretch`.
+- Inspect `<style>` character data for `@font-face`, `font-family`, and `url(...)`; count external font URLs without fetching them.
+- Add target-profile booleans such as `ReviewTypography` and `RequireOutlinedText`.
+- Preserve existing `text-not-outlined` for vinyl, laser, CNC, and plotter targets.
+
+Issue codes:
+
+- `live-text-for-print`: warning, rank high for paper, packaging, fabric, banner, signage, and vehicle wrap; rank moderate for generic physical-size targets.
+- `font-family-dependency`: warning, rank moderate when live text uses non-generic families.
+- `external-font-reference`: warning, rank high for print, packaging, fabric, and cutter handoff; rank moderate otherwise when external refs are reviewed.
+- `embedded-font-data`: info or warning, rank low to moderate; message should mention opaque licensing and RIP behavior.
+- `textpath-rendering-risk`: warning, rank moderate for print-like targets.
+- `text-not-outlined`: keep existing code for cutter-like targets; consider ranking it high.
+
+Tests and docs:
+
+- Add table tests for paper, packaging, fabric, vinyl, and screen.
+- Add fixture `print-edge-live-text-fonts.svg` with plain live text, `tspan`, `textPath`, inherited font-family, inline style font, external `@font-face`, and embedded data font.
+- Assert screen output stays quiet for print-only typography warnings.
+- Update README reported-issue bullets, limits, and web demo metadata if typography counts are surfaced.
+
+Commit slices:
+
+1. Add typography metadata collection and unit tests.
+2. Add target-profile typography issue rules and ranks.
+3. Update CLI/WASM report surfaces and docs.
 
 ### 4. Color-Management Profile Support
 
 Problem: current RGB/CMYK detection is heuristic and does not give a useful color inventory for proofing or separations.
 
-Initial shape:
+Owner: Text Color Agent, `gpt-5.5`, high thinking. This is inventory and proofing guidance, not ICC conversion or gamut validation.
 
-- Parse color-bearing attributes and inline CSS into a structured inventory.
-- Categorize RGB/web colors, CMYK-like syntax, ICC-linked colors, named colors, gradients, and alpha-bearing colors.
-- Add target-specific language for press, packaging, textile, and spot-color workflows.
+CLI/API surface:
 
-Likely issue codes: `rgb-colors-for-print`, `cmyk-in-svg`, `icc-color-in-svg`, `transparent-color`, `many-spot-like-colors`.
+- Extend existing `check` reports with richer color signals; no new command is needed for v1.
+- Add `SVGMeta` fields such as `RGBColors`, `NamedColors`, `CMYKColors`, `ICCColors`, `AlphaColors`, `GradientColorStops`, and possibly a compact `ColorSummary` slice later.
+- Mirror count fields into WASM API metadata.
+- Keep `fix --fix colors` advisory-only.
+
+Implementation sketch:
+
+- Replace or augment `colorSetFrom` with structured color collection from XML attributes, inline `style`, and `<style>` text.
+- Classify values from `fill`, `stroke`, `stop-color`, `flood-color`, `lighting-color`, and `color`.
+- Count alpha from `rgba`, `hsla`, 8-digit hex, `opacity`, `fill-opacity`, `stroke-opacity`, and `stop-opacity`.
+- Detect `device-cmyk(...)`, `cmyk(...)`, and `icc-color(...)` separately instead of lumping all into `CMYKColors`.
+- Preserve existing `UniqueColors`, `ColorValues`, and `rgb-colors-for-print` behavior where possible.
+
+Issue codes:
+
+- `rgb-colors-for-print`: existing warning, rank high for paper and packaging; moderate to high for fabric depending color count.
+- `cmyk-in-svg`: existing warning, rank moderate; message should say SVG CMYK support is inconsistent.
+- `icc-color-in-svg`: warning, rank moderate to high for press targets; final PDF/RIP must preserve profile intent.
+- `transparent-color`: warning, rank moderate for print-like targets when alpha-bearing color is present.
+- `named-color-for-print`: info, rank low; named SVG colors are web-oriented.
+- `gradient-color-inventory`: info or warning, rank low to moderate; keep this about separations/proofing, not flattening.
+
+Tests and docs:
+
+- Add focused tests for hex, rgb, rgba, hsl/hsla, named color, `device-cmyk`, `icc-color`, gradient stops, and opacity.
+- Add fixture `print-edge-color-management.svg`.
+- Update expectations for existing `print-edge-cmyk-colors.svg`.
+- Assert `screen` does not emit print-color warnings, while paper and packaging do.
+- Update README to clarify that SVG is not a press color-management container.
+
+Commit slices:
+
+1. Add structured color inventory while preserving current issue behavior.
+2. Add new color-management issue rules and ranking.
+3. Update CLI/WASM summaries, README, and fixture coverage.
 
 ### 5. PDF/X Readiness Or Export Bridge
 
@@ -102,13 +166,44 @@ Likely issue codes: `filter-flattening-risk`, `mask-flattening-risk`, `opacity-f
 
 Problem: SVG does not model print overprint directly, but production files often rely on layer names, white ink, underbase, or spot-color conventions.
 
-Initial shape:
+Owner: Text Color Agent, `gpt-5.5`, high thinking. Keep matching conservative and non-absolute because shop naming conventions vary widely.
 
-- Detect white fills/strokes, spot-like names, layer/group labels, and opacity/blend constructs that can imply knockout or overprint expectations.
-- Add packaging, label, sticker, and textile guidance without claiming the SVG can prove final separations.
-- Encourage final PDF/RIP proof where the SVG cannot encode the intent.
+CLI/API surface:
 
-Likely issue codes: `white-ink-review`, `spot-layer-review`, `underbase-review`, `overprint-intent-unverified`.
+- Use existing targets: `packaging`, `vinyl`, `sticker`, `fabric`, `paper`, and `signage`.
+- Add `SVGMeta` counts such as `WhiteInkCandidates`, `SpotLayerNames`, `UnderbaseCandidates`, `OverprintHints`, and `KnockoutHints`.
+- Keep `fix --fix colors` and `fix --fix typography` advisory-only for these codes.
+- Surface nonzero counts in Markdown/HTML and WASM metadata.
+
+Implementation sketch:
+
+- Inspect group/layer labels from `id`, `class`, `inkscape:label`, `data-name`, `aria-label`, and child `<title>`.
+- Match conservative terms: `white ink`, `spot white`, `underbase`, `base white`, `pantone`, `pms`, `spot`, `varnish`, `dieline`, `cutcontour`, `overprint`, and `knockout`.
+- Detect white fills/strokes on non-background elements, especially text or shapes over transparent/no explicit background.
+- Detect explicit or pseudo attributes containing `overprint` or `knockout`, plus CSS `mix-blend-mode:multiply` only as an intent hint.
+- Do not claim SVG can prove final separations, overprint, or knockout behavior.
+
+Issue codes:
+
+- `white-ink-review`: warning, rank high for packaging, vinyl, and fabric; rank moderate for paper and signage.
+- `spot-layer-review`: warning, rank high when spot-like layer names appear in packaging, label, sticker, or fabric targets; rank moderate otherwise.
+- `underbase-review`: warning, rank high for fabric, vinyl, and packaging.
+- `overprint-intent-unverified`: warning, rank high when explicit overprint/knockout hints are found; rank moderate for blend/name-only hints.
+- `white-on-transparent-review`: optional narrow warning, rank moderate, when white art exists without an opaque background.
+
+Tests and docs:
+
+- Add fixture `print-edge-spot-white-underbase.svg`.
+- Include white text on transparent background, `inkscape:label="Spot White"`, `id="PANTONE_185_C"`, `class="underbase"`, `data-overprint="true"`, and `style="mix-blend-mode:multiply"`.
+- Assert target-specific rank differences for packaging/vinyl/fabric versus screen.
+- Assert normal white page backgrounds do not trigger `white-ink-review`.
+- Update README with spot/white ink limitations and final PDF/RIP proof language.
+
+Commit slices:
+
+1. Add layer/name/white/underbase/overprint hint inventory.
+2. Add target-specific issue rules and false-positive guards for white backgrounds.
+3. Add fixtures/tests, WASM/CLI report mapping, and docs.
 
 ### 8. Cutter, Laser, And CNC Toolpath Health
 
@@ -164,4 +259,3 @@ Every feature should update:
 - This roadmap if scope changes while implementing.
 - Any web demo copy under `docs/` when new report fields appear there.
 - Tests beside the package they cover.
-
