@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall/js"
 
-	"github.com/dan/pre-print-tools/internal/svgcheck"
+	"github.com/dan/pre-print-check/internal/svgcheck"
 )
 
 type apiResponse struct {
@@ -79,7 +79,7 @@ func main() {
 	register(api, "fix", fix)
 	register(api, "fixCategories", fixCategories)
 	api.Set("ready", true)
-	js.Global().Set("prePrintTools", api)
+	js.Global().Set("prePrintCheck", api)
 	select {}
 }
 
@@ -98,7 +98,7 @@ func encodeResponse(fn func() apiResponse) (out string) {
 		if recovered := recover(); recovered != nil {
 			body, _ := json.Marshal(apiResponse{
 				OK:    false,
-				Error: fmt.Sprintf("pre-print WASM panic: %v\n%s", recovered, debug.Stack()),
+				Error: fmt.Sprintf("pre-print-check WASM panic: %v\n%s", recovered, debug.Stack()),
 			})
 			out = string(body)
 		}

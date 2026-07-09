@@ -125,10 +125,10 @@ async function bootWasm() {
     setStatus("Loading", "loading");
     el.summaryLine.textContent = "loading runtime…";
     const go = new Go();
-    const response = await fetch("../dist/pre-print.wasm");
+    const response = await fetch("../dist/pre-print-check.wasm");
     const result = await instantiateWasm(response, go.importObject);
     go.run(result.instance);
-    await waitFor(() => window.prePrintTools?.ready);
+    await waitFor(() => window.prePrintCheck?.ready);
     state.wasmReady = true;
     setControlsEnabled(true);
     setStatus("Ready", "ready");
@@ -219,7 +219,7 @@ async function analyzeCurrent() {
 }
 
 function callTool(name, svg, options) {
-  const raw = window.prePrintTools[name](svg, options || {});
+  const raw = window.prePrintCheck[name](svg, options || {});
   const response = JSON.parse(raw);
   if (!response.ok) {
     throw new Error(response.error || `${name} failed`);

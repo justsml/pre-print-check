@@ -1,7 +1,7 @@
 .PHONY: build test vet wasm npm-test serve-web
 
 build:
-	go build -o pre-print .
+	go build -o pre-print-check .
 
 test:
 	go test ./...
@@ -11,7 +11,7 @@ vet:
 
 wasm:
 	mkdir -p dist
-	GOOS=js GOARCH=wasm go build -o dist/pre-print.wasm ./cmd/preprint-wasm
+	GOOS=js GOARCH=wasm go build -o dist/pre-print-check.wasm ./cmd/preprintcheck-wasm
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" dist/wasm_exec.js
 
 npm-test:

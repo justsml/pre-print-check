@@ -12,11 +12,11 @@ Keep new code inside `internal/` unless it is part of the top-level command boot
 
 ## Build, Test, and Development Commands
 
-- `make build` builds the CLI binary as `./pre-print`.
+- `make build` builds the CLI binary as `./pre-print-check`.
 - `make test` runs `go test ./...` across all packages.
 - `make vet` runs `go vet ./...` for static checks.
-- `./pre-print check --target vinyl art.svg` runs a local preflight check.
-- `./pre-print fix -o art.fixed.svg art.svg` writes a conservatively repaired SVG.
+- `./pre-print-check check --target vinyl art.svg` runs a local preflight check.
+- `./pre-print-check fix -o art.fixed.svg art.svg` writes a conservatively repaired SVG.
 
 Run `make test` before opening a PR. Run `make vet` when changing parsing, file handling, or reporting.
 

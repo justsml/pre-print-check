@@ -1,6 +1,6 @@
-# pre-print
+# pre-print-check
 
-`pre-print` is a local SVG preflight and repair tool for artwork headed to paper, packaging, fabric, vinyl, signage, banners, vehicle wraps, laser engraving, CNC, plotters, and web output.
+`pre-print-check` is a local SVG preflight and repair tool for artwork headed to paper, packaging, fabric, vinyl, signage, banners, vehicle wraps, laser engraving, CNC, plotters, and web output.
 
 It is intentionally conservative. It catches risks that are visible in the SVG source, explains why they matter, and only applies automatic fixes when the change is narrow enough to trust. It does not replace a printer proof, RIP, cutter setup, or press-ready PDF workflow. It gives you the earlier, cheaper warning.
 
@@ -13,7 +13,7 @@ SVGs move easily between design tools, web apps, storefronts, and print shops, b
 - A banner or wrap may turn a tiny low-resolution image into a very visible problem.
 - A browser can tolerate external references and scripts that a production workflow should reject.
 
-`pre-print` gives those concerns names, severities, ranks, and stable issue codes so people and scripts can act on them.
+`pre-print-check` gives those concerns names, severities, ranks, and stable issue codes so people and scripts can act on them.
 
 ## Install
 
@@ -21,18 +21,18 @@ Build the native CLI from this repository:
 
 ```sh
 make build
-./pre-print check --target vinyl art.svg
+./pre-print-check check --target vinyl art.svg
 ```
 
 Or use the WASM package from JavaScript:
 
 ```sh
-npm install pre-print
+npm install pre-print-check
 ```
 
 ```js
 import { promises as fs } from "node:fs";
-import { check, fix } from "pre-print";
+import { check, fix } from "pre-print-check";
 
 const svg = await fs.readFile("art.svg", "utf8");
 const report = await check(svg, { target: "packaging" });
@@ -55,38 +55,38 @@ The npm package is a wrapper around the same Go engine compiled to WebAssembly. 
 Check one SVG:
 
 ```sh
-./pre-print check --target paper art.svg
+./pre-print-check check --target paper art.svg
 ```
 
 Write a Markdown or HTML report:
 
 ```sh
-./pre-print check --target vinyl --format md art.svg > report.md
-./pre-print check --target banner@20ft --format html art.svg > report.html
+./pre-print-check check --target vinyl --format md art.svg > report.md
+./pre-print-check check --target banner@20ft --format html art.svg > report.html
 ```
 
 Generate a visual overlay for locatable production risks:
 
 ```sh
-./pre-print check --target paper --overlay art.overlay.svg art.svg
+./pre-print-check check --target paper --overlay art.overlay.svg art.svg
 ```
 
 Apply safe automatic fixes to a copy:
 
 ```sh
-./pre-print fix --target paper -o art.fixed.svg art.svg
+./pre-print-check fix --target paper -o art.fixed.svg art.svg
 ```
 
 Apply selected fixes:
 
 ```sh
-./pre-print fix --fix metadata,bleed -o art.fixed.svg art.svg
+./pre-print-check fix --fix metadata,bleed -o art.fixed.svg art.svg
 ```
 
 Allow destructive repairs only when you mean it:
 
 ```sh
-./pre-print fix --fix safety,effects,raster --unsafe -o stripped.svg art.svg
+./pre-print-check fix --fix safety,effects,raster --unsafe -o stripped.svg art.svg
 ```
 
 ## Targets
@@ -94,15 +94,15 @@ Allow destructive repairs only when you mean it:
 Targets can describe an output material, a physical size, a resolution, or a material plus size.
 
 ```sh
-./pre-print check --target screen art.svg
-./pre-print check --target paper art.svg
-./pre-print check --target vinyl art.svg
-./pre-print check --target fabric@14in art.svg
-./pre-print check --target banner@20ft art.svg
-./pre-print check --target 90in art.svg
-./pre-print check --target 1.2m art.svg
-./pre-print check --target 4k art.svg
-./pre-print check --target 8k art.svg
+./pre-print-check check --target screen art.svg
+./pre-print-check check --target paper art.svg
+./pre-print-check check --target vinyl art.svg
+./pre-print-check check --target fabric@14in art.svg
+./pre-print-check check --target banner@20ft art.svg
+./pre-print-check check --target 90in art.svg
+./pre-print-check check --target 1.2m art.svg
+./pre-print-check check --target 4k art.svg
+./pre-print-check check --target 8k art.svg
 ```
 
 Supported material intents:
@@ -123,7 +123,7 @@ Supported material intents:
 
 ## What It Checks
 
-`pre-print` reports objective blockers when it can prove a problem from the SVG:
+`pre-print-check` reports objective blockers when it can prove a problem from the SVG:
 
 - missing `viewBox`, missing SVG namespace, and missing explicit size
 - scripts and inline event handlers
@@ -162,7 +162,7 @@ By default, `fix` only performs conservative changes:
 The npm package exposes async helpers and a cached runtime loader:
 
 ```js
-import { loadPrePrint, check, overlay, fix, fixCategories } from "pre-print";
+import { loadPrePrintCheck, check, overlay, fix, fixCategories } from "pre-print-check";
 
 const report = await check(svg, { target: "vinyl" });
 const overlaySVG = await overlay(svg, { target: "vinyl" });
@@ -172,14 +172,14 @@ const fixed = await fix(svg, {
 });
 const categories = await fixCategories();
 
-const prePrint = await loadPrePrint();
+const prePrint = await loadPrePrintCheck();
 const sameReport = prePrint.check(svg, { target: "paper" });
 ```
 
 `check()` returns a structured report:
 
 ```ts
-type PrePrintReport = {
+type PrePrintCheckReport = {
   summary: string;
   friendlySummary: string;
   target?: string;
@@ -199,11 +199,11 @@ type PrePrintReport = {
 };
 ```
 
-The default loader reads `dist/pre-print.wasm` and `dist/wasm_exec.js` from the installed package. Browser bundlers that need explicit asset URLs can pass them:
+The default loader reads `dist/pre-print-check.wasm` and `dist/wasm_exec.js` from the installed package. Browser bundlers that need explicit asset URLs can pass them:
 
 ```js
-const prePrint = await loadPrePrint({
-  wasmURL: new URL("./pre-print.wasm", import.meta.url),
+const prePrint = await loadPrePrintCheck({
+  wasmURL: new URL("./pre-print-check.wasm", import.meta.url),
   wasmExecURL: new URL("./wasm_exec.js", import.meta.url),
 });
 ```
@@ -211,7 +211,7 @@ const prePrint = await loadPrePrint({
 CommonJS works too:
 
 ```js
-const { check } = require("pre-print");
+const { check } = require("pre-print-check");
 const report = await check(svg, { target: "paper" });
 ```
 
@@ -233,7 +233,7 @@ The demo loads SVGs locally, shows the original/overlay/source views, applies sa
 make build      # native CLI
 make test       # go test ./...
 make vet        # go vet ./...
-make wasm       # dist/pre-print.wasm plus Go wasm_exec.js
+make wasm       # dist/pre-print-check.wasm plus Go wasm_exec.js
 npm test        # build WASM and run the JS wrapper smoke test
 ```
 
@@ -242,8 +242,8 @@ Project layout:
 - `main.go` boots the native command.
 - `internal/cli/` owns command parsing, user-facing output, exit codes, and file I/O.
 - `internal/svgcheck/` owns SVG inspection, target parsing, issues, overlays, and fixes.
-- `cmd/preprint-wasm/` exposes the checker to JavaScript through Go WASM.
-- `npm/` wraps the WASM runtime as the `pre-print` npm package.
+- `cmd/preprintcheck-wasm/` exposes the checker to JavaScript through Go WASM.
+- `npm/` wraps the WASM runtime as the `pre-print-check` npm package.
 - `docs/` contains the local browser demo.
 
 Run `make test` before opening a PR. Run `make vet` when changing parsing, file handling, or reporting.
@@ -258,7 +258,7 @@ SVG is a flexible interchange format, not a full production ticket. Some facts c
 - RIP-specific handling of transparency, filters, masks, clipping, shadows, and blend modes
 - true output quality for unresolved external resources
 
-For press output, use `pre-print` before exporting or reviewing the final press-ready PDF. Then confirm the printer's product template, bleed, trim, safe zone, color, font, image-resolution, flattening, and proofing requirements.
+For press output, use `pre-print-check` before exporting or reviewing the final press-ready PDF. Then confirm the printer's product template, bleed, trim, safe zone, color, font, image-resolution, flattening, and proofing requirements.
 
 ## Roadmap
 

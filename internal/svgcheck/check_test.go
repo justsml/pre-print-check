@@ -481,9 +481,9 @@ func TestGenerateOverlayHighlightsLocatableIssues(t *testing.T) {
 	got := string(overlay)
 	for _, want := range []string{
 		`<svg xmlns="http://www.w3.org/2000/svg"`,
-		`id="pre-print-overlay"`,
-		`id="pre-print-near-disconnected-highlights"`,
-		`id="pre-print-thin-stroke-highlights"`,
+		`id="pre-print-check-overlay"`,
+		`id="pre-print-check-near-disconnected-highlights"`,
+		`id="pre-print-check-thin-stroke-highlights"`,
 		`near-disconnected-lines`,
 		`thin-stroke`,
 	} {
@@ -496,7 +496,7 @@ func TestGenerateOverlayHighlightsLocatableIssues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateOverlay returned error: %v", err)
 	}
-	if strings.Contains(string(screenOverlay), `id="pre-print-near-disconnected-highlights"`) {
+	if strings.Contains(string(screenOverlay), `id="pre-print-check-near-disconnected-highlights"`) {
 		t.Fatalf("did not expect near-disconnected highlights for screen overlay: %s", string(screenOverlay))
 	}
 }

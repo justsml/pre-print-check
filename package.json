@@ -12,11 +12,11 @@
       "import": "./npm/index.js",
       "require": "./npm/index.cjs"
     },
-    "./pre-print.wasm": "./dist/pre-print.wasm",
+    "./pre-print-check.wasm": "./dist/pre-print-check.wasm",
     "./wasm_exec.js": "./dist/wasm_exec.js"
   },
   "files": [
-    "dist/pre-print.wasm",
+    "dist/pre-print-check.wasm",
     "dist/wasm_exec.js",
     "npm/index.cjs",
     "npm/index.d.ts",

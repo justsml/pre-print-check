@@ -8,14 +8,14 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dan/pre-print-tools/internal/svgcheck"
+	"github.com/dan/pre-print-check/internal/svgcheck"
 )
 
-const usage = `pre-print validates and repairs SVGs for print and web.
+const usage = `pre-print-check validates and repairs SVGs for print and web.
 
 Usage:
-  pre-print check [--target screen|paper|fabric|vinyl|20ft|4k] [--format terminal|md|html] [--overlay OUTPUT.svg] FILE.svg
-  pre-print fix [--target TARGET] [--fix all|metadata,safety,...] [--unsafe] [-o OUTPUT.svg] FILE.svg
+  pre-print-check check [--target screen|paper|fabric|vinyl|20ft|4k] [--format terminal|md|html] [--overlay OUTPUT.svg] FILE.svg
+  pre-print-check fix [--target TARGET] [--fix all|metadata,safety,...] [--unsafe] [-o OUTPUT.svg] FILE.svg
 
 Commands:
   check    Report print/web risks in an SVG

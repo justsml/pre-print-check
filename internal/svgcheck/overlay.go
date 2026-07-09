@@ -64,7 +64,7 @@ func GenerateOverlay(input []byte, opts OverlayOptions) ([]byte, error) {
 	fmt.Fprintf(&out, `<g opacity="0.24"><svg x="%s" y="%s" width="%s" height="%s" viewBox="%s" preserveAspectRatio="xMidYMid meet">%s</svg></g>`+"\n",
 		trimFloat(minX), trimFloat(minY), trimFloat(width), trimFloat(height), escapeAttr(viewBox), stripXMLDeclaration(input))
 
-	out.WriteString(`<g id="pre-print-overlay" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">` + "\n")
+	out.WriteString(`<g id="pre-print-check-overlay" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">` + "\n")
 	writeThinShapeHighlights(&out, data.ThinShapes, scale)
 	writeNearDisconnectedHighlights(&out, data.Endpoints, scale)
 	writeOverlayPanel(&out, data.Report, panelX, panelY, panelWidth, scale)
@@ -136,7 +136,7 @@ func writeThinShapeHighlights(out *strings.Builder, shapes []thinShape, scale fl
 	if len(shapes) == 0 {
 		return
 	}
-	out.WriteString(`<g id="pre-print-thin-stroke-highlights">` + "\n")
+	out.WriteString(`<g id="pre-print-check-thin-stroke-highlights">` + "\n")
 	for _, shape := range shapes {
 		writeHighlightedGeometry(out, shape, "#f59e0b", 3.2*scale, 0.78)
 		writeHighlightedGeometry(out, shape, "#fff7ed", 1.35*scale, 0.92)
@@ -149,7 +149,7 @@ func writeNearDisconnectedHighlights(out *strings.Builder, endpoints []geometryE
 	if len(pairs) < nearDisconnectedMinimumPairs {
 		return
 	}
-	out.WriteString(`<g id="pre-print-near-disconnected-highlights">` + "\n")
+	out.WriteString(`<g id="pre-print-check-near-disconnected-highlights">` + "\n")
 	for i, pair := range pairs {
 		labelX := (pair.a.x+pair.b.x)/2 + 7*scale
 		labelY := (pair.a.y+pair.b.y)/2 - 7*scale
@@ -171,7 +171,7 @@ func writeOverlayPanel(out *strings.Builder, report Report, x, y, width, scale f
 	errors, warnings, info := report.IssueCounts()
 	lineHeight := 15 * scale
 	height := (78 + float64(min(len(report.Issues), 6))*15) * scale
-	fmt.Fprintf(out, `<g id="pre-print-overlay-panel" transform="translate(%s %s)" filter="url(#ppt-overlay-shadow)">`+"\n", trimFloat(x), trimFloat(y))
+	fmt.Fprintf(out, `<g id="pre-print-check-overlay-panel" transform="translate(%s %s)" filter="url(#ppt-overlay-shadow)">`+"\n", trimFloat(x), trimFloat(y))
 	fmt.Fprintf(out, `<rect x="0" y="0" width="%s" height="%s" rx="%s" fill="#0f172a" opacity="0.92"/>`+"\n", trimFloat(width), trimFloat(height), trimFloat(10*scale))
 	fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" font-weight="800" fill="#ffffff">Pre-print overlay</text>`+"\n", trimFloat(14*scale), trimFloat(23*scale), trimFloat(14*scale))
 	fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" fill="#cbd5e1">%d error(s) · %d warning(s) · %d note(s)</text>`+"\n", trimFloat(14*scale), trimFloat(42*scale), trimFloat(10*scale), errors, warnings, info)

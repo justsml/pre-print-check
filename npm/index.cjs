@@ -2,7 +2,7 @@
 
 const loadModule = () => import("./index.js");
 
-exports.loadPrePrint = async (...args) => (await loadModule()).loadPrePrint(...args);
+exports.loadPrePrintCheck = async (...args) => (await loadModule()).loadPrePrintCheck(...args);
 exports.check = async (...args) => (await loadModule()).check(...args);
 exports.overlay = async (...args) => (await loadModule()).overlay(...args);
 exports.fix = async (...args) => (await loadModule()).fix(...args);

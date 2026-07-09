@@ -2,7 +2,7 @@
 
 This roadmap turns the current SVG checker into a production-profile preflight tool without pretending an SVG alone can prove every press, cutter, or RIP outcome.
 
-`pre-print` should stay conservative by default:
+`pre-print-check` should stay conservative by default:
 
 - Keep checks explainable from the SVG source or explicitly provided target options.
 - Keep fixes opt-in and narrow, especially when artwork appearance can change.
@@ -31,10 +31,10 @@ Gaps 5, 6, and 10 should share one explicit profile system rather than adding on
 Proposed CLI:
 
 ```sh
-pre-print check --target paper --profile pdfx-ready art.svg
-pre-print check --target paper --profile flattening-risk art.svg
-pre-print check --profile static-svg art.svg
-pre-print check --target packaging --profile static-svg,pdfx-ready art.svg
+pre-print-check check --target paper --profile pdfx-ready art.svg
+pre-print-check check --target paper --profile flattening-risk art.svg
+pre-print-check check --profile static-svg art.svg
+pre-print-check check --target packaging --profile static-svg,pdfx-ready art.svg
 ```
 
 Proposed Go API:
@@ -66,7 +66,7 @@ Owner: Press Geometry Agent, `gpt-5.4`, high thinking. Implement this with gap 2
 CLI/API surface:
 
 - Add `--width`, `--height`, `--bleed`, and `--safe-margin` to `check` and `fix`.
-- Example: `pre-print check --target paper --width 4in --height 6in --bleed 0.125in --safe-margin 0.25in art.svg`.
+- Example: `pre-print-check check --target paper --width 4in --height 6in --bleed 0.125in --safe-margin 0.25in art.svg`.
 - Add matching `CheckOptions` and `FixOptions` fields.
 - Keep width-only target parsing backward compatible.
 
@@ -151,7 +151,7 @@ Owner: Text Color Agent, `gpt-5.5`, high thinking. Keep this work inside text an
 
 CLI/API surface:
 
-- Extend existing `pre-print check --target ... FILE.svg`; no new flag is needed for v1.
+- Extend existing `pre-print-check check --target ... FILE.svg`; no new flag is needed for v1.
 - Keep `fix --fix typography` advisory-only. Do not outline text automatically.
 - Extend `svgcheck.SVGMeta` with counts such as `TSpanElements`, `TextPathElements`, `FontFamilies`, `FontFaceRules`, `ExternalFontRefs`, and `EmbeddedFontData`.
 - Mirror key counts into the WASM API metadata.
@@ -371,7 +371,7 @@ Owner: Toolpath Agent, `gpt-5.4`, high thinking for geometry/parser slices. Keep
 
 CLI/API surface:
 
-- Extend existing `pre-print check --target vinyl|laser|cnc|plotter`.
+- Extend existing `pre-print-check check --target vinyl|laser|cnc|plotter`.
 - Reuse overlay output to highlight locatable toolpath findings.
 - Extend `SVGMeta` and WASM `apiMeta` with counters such as `DuplicateToolpaths`, `DegenerateToolpathSegments`, `FilledOpenPaths`, `SelfIntersectingToolpaths`, and `DenseToolpaths`.
 - Do not add a generic `open-toolpath` issue in v1. Open centerlines can be valid for engraving/scoring; flag only open paths that visually imply a closed cut shape.
@@ -386,7 +386,7 @@ Implementation sketch:
 - Add bounded curve/arc flattening for `C`, `Q`, `S`, `T`, and `A` path commands.
 - Track contour metadata: closed/open, filled/stroked, segment count, total length, and minimum segment length.
 - Keep existing `near-disconnected-lines`, `thin-stroke`, and `small-detail-durability` behavior intact.
-- Add overlay highlight groups such as `pre-print-duplicate-toolpath-highlights`, `pre-print-degenerate-toolpath-highlights`, and `pre-print-self-intersection-highlights`.
+- Add overlay highlight groups such as `pre-print-check-duplicate-toolpath-highlights`, `pre-print-check-degenerate-toolpath-highlights`, and `pre-print-check-self-intersection-highlights`.
 
 Issue codes:
 

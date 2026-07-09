@@ -1,4 +1,4 @@
-export interface PrePrintOptions {
+export interface PrePrintCheckOptions {
   target?: string;
 }
 
@@ -8,19 +8,19 @@ export interface LoadOptions {
   timeoutMs?: number;
 }
 
-export interface FixOptions extends PrePrintOptions {
+export interface FixOptions extends PrePrintCheckOptions {
   categories?: string | string[];
   fix?: string | string[];
   unsafe?: boolean;
 }
 
-export interface PrePrintCounts {
+export interface PrePrintCheckCounts {
   errors: number;
   warnings: number;
   info: number;
 }
 
-export interface PrePrintMeta {
+export interface PrePrintCheckMeta {
   width?: string;
   height?: string;
   viewBox?: string;
@@ -40,7 +40,7 @@ export interface PrePrintMeta {
   backgroundTransparency: number;
 }
 
-export interface PrePrintIssue {
+export interface PrePrintCheckIssue {
   severity: "error" | "warning" | "info" | string;
   code: string;
   message: string;
@@ -50,14 +50,14 @@ export interface PrePrintIssue {
   automaticFix: boolean;
 }
 
-export interface PrePrintReport {
+export interface PrePrintCheckReport {
   summary: string;
   friendlySummary: string;
   target?: string;
   targetDetails?: string;
-  counts: PrePrintCounts;
-  meta: PrePrintMeta;
-  issues: PrePrintIssue[];
+  counts: PrePrintCheckCounts;
+  meta: PrePrintCheckMeta;
+  issues: PrePrintCheckIssue[];
   fixCategories: string[];
 }
 
@@ -65,19 +65,19 @@ export interface FixResult {
   svg: string;
   changes: string[];
   skipped: string[];
-  report: PrePrintReport;
+  report: PrePrintCheckReport;
   overlay: string;
 }
 
-export interface PrePrintAPI {
-  check(svg: string, options?: PrePrintOptions): PrePrintReport;
-  overlay(svg: string, options?: PrePrintOptions): string;
+export interface PrePrintCheckAPI {
+  check(svg: string, options?: PrePrintCheckOptions): PrePrintCheckReport;
+  overlay(svg: string, options?: PrePrintCheckOptions): string;
   fix(svg: string, options?: FixOptions): FixResult;
   fixCategories(): string[];
 }
 
-export function loadPrePrint(options?: LoadOptions): Promise<PrePrintAPI>;
-export function check(svg: string, options?: PrePrintOptions): Promise<PrePrintReport>;
-export function overlay(svg: string, options?: PrePrintOptions): Promise<string>;
+export function loadPrePrintCheck(options?: LoadOptions): Promise<PrePrintCheckAPI>;
+export function check(svg: string, options?: PrePrintCheckOptions): Promise<PrePrintCheckReport>;
+export function overlay(svg: string, options?: PrePrintCheckOptions): Promise<string>;
 export function fix(svg: string, options?: FixOptions): Promise<FixResult>;
 export function fixCategories(): Promise<string[]>;

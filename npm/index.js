@@ -1,9 +1,9 @@
-const defaultWasmURL = new URL("../dist/pre-print.wasm", import.meta.url);
+const defaultWasmURL = new URL("../dist/pre-print-check.wasm", import.meta.url);
 const defaultWasmExecURL = new URL("../dist/wasm_exec.js", import.meta.url);
 
 let runtimePromise;
 
-export async function loadPrePrint(options = {}) {
+export async function loadPrePrintCheck(options = {}) {
   if (!runtimePromise) {
     runtimePromise = bootRuntime(options);
   }
@@ -11,30 +11,30 @@ export async function loadPrePrint(options = {}) {
 }
 
 export async function check(svg, options = {}) {
-  const api = await loadPrePrint();
+  const api = await loadPrePrintCheck();
   return api.check(svg, options);
 }
 
 export async function overlay(svg, options = {}) {
-  const api = await loadPrePrint();
+  const api = await loadPrePrintCheck();
   return api.overlay(svg, options);
 }
 
 export async function fix(svg, options = {}) {
-  const api = await loadPrePrint();
+  const api = await loadPrePrintCheck();
   return api.fix(svg, options);
 }
 
 export async function fixCategories() {
-  const api = await loadPrePrint();
+  const api = await loadPrePrintCheck();
   return api.fixCategories();
 }
 
 async function bootRuntime(options) {
   await loadGoRuntime(options.wasmExecURL || defaultWasmExecURL);
 
-  if (globalThis.prePrintTools?.ready) {
-    return createAPI(globalThis.prePrintTools);
+  if (globalThis.prePrintCheck?.ready) {
+    return createAPI(globalThis.prePrintCheck);
   }
 
   const GoCtor = globalThis.Go;
@@ -54,7 +54,7 @@ async function bootRuntime(options) {
   });
 
   await waitForReady(options.timeoutMs || 4000);
-  return createAPI(globalThis.prePrintTools);
+  return createAPI(globalThis.prePrintCheck);
 }
 
 async function loadGoRuntime(wasmExecURL) {
@@ -75,7 +75,7 @@ async function instantiateWasm(wasmURL, importObject) {
 
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`Could not load pre-print WASM: ${response.status} ${response.statusText}`);
+    throw new Error(`Could not load pre-print-check WASM: ${response.status} ${response.statusText}`);
   }
   if (WebAssembly.instantiateStreaming) {
     try {
@@ -115,11 +115,11 @@ function createAPI(rawAPI) {
 function call(rawAPI, name, svg, options) {
   const fn = rawAPI?.[name];
   if (typeof fn !== "function") {
-    throw new Error(`pre-print WASM API is missing ${name}()`);
+    throw new Error(`pre-print-check WASM API is missing ${name}()`);
   }
   const response = JSON.parse(fn(String(svg ?? ""), options || {}));
   if (!response.ok) {
-    const error = new Error(response.error || `pre-print ${name} failed`);
+    const error = new Error(response.error || `pre-print-check ${name} failed`);
     error.response = response;
     throw error;
   }
@@ -137,12 +137,12 @@ function waitForReady(timeoutMs) {
   return new Promise((resolve, reject) => {
     const started = Date.now();
     const tick = () => {
-      if (globalThis.prePrintTools?.ready) {
+      if (globalThis.prePrintCheck?.ready) {
         resolve();
         return;
       }
       if (Date.now() - started > timeoutMs) {
-        reject(new Error("pre-print WASM API did not become ready"));
+        reject(new Error("pre-print-check WASM API did not become ready"));
         return;
       }
       setTimeout(tick, 0);

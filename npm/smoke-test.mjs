@@ -25,4 +25,4 @@ assert.ok(fixed.changes.length >= 3);
 const overlaySVG = await overlay(fixed.svg, { target: "vinyl" });
 assert.ok(overlaySVG.includes("<svg"));
 
-console.log("pre-print WASM smoke test passed");
+console.log("pre-print-check WASM smoke test passed");
