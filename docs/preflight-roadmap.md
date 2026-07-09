@@ -24,6 +24,32 @@ This roadmap turns the current SVG checker into a production-profile preflight t
 | 9 | Hidden, nonprinting, off-canvas, or bloated content | Press Geometry Agent | `gpt-5.4` | high | Useful across print, cutter, and upload validation. |
 | 10 | Static SVG interoperability profile | PDF Effects Agent | `gpt-5.5` | high | Defines a predictable print/static rendering subset. |
 
+## Shared Profile Mechanism
+
+Gaps 5, 6, and 10 should share one explicit profile system rather than adding one-off flags for each scenario.
+
+Proposed CLI:
+
+```sh
+pre-print check --target paper --profile pdfx-ready art.svg
+pre-print check --target paper --profile flattening-risk art.svg
+pre-print check --profile static-svg art.svg
+pre-print check --target packaging --profile static-svg,pdfx-ready art.svg
+```
+
+Proposed Go API:
+
+```go
+type CheckOptions struct {
+	Target   string
+	Profiles []string
+}
+
+func CheckWithOptions(input []byte, opts CheckOptions) (Report, error)
+```
+
+Keep `Check(input, rawTarget)` as a compatibility wrapper around `CheckWithOptions`.
+
 ## Product Gaps
 
 ### 1. Bleed, Trim, And Safe-Area Checks
@@ -142,25 +168,90 @@ Commit slices:
 
 Problem: press workflows usually need a final PDF/X or printer-specific PDF proof, while this tool currently stops at SVG source inspection.
 
-Initial shape:
+Owner: PDF Effects Agent, `gpt-5.5`, high thinking. Start with readiness; keep export and validation as optional explicit bridge commands.
 
-- Add a readiness report that explains whether the SVG has known blockers before export.
-- Keep actual export or PDF validation behind explicit commands and external-tool detection.
-- Treat missing tools as advisory, not a required dependency for ordinary SVG checks.
+CLI/API surface:
 
-Likely issue codes: `pdfx-readiness-blocker`, `pdfx-export-tool-missing`, `pdfx-validation-unavailable`.
+- Add `--profile pdfx-ready` to `check`.
+- Later, consider explicit commands: `pdfx-tools`, `pdfx-validate proof.pdf`, and `pdfx-export --profile pdfx-4 -o proof.pdf art.svg`.
+- Do not require external tools for normal `check`.
+- Keep export/tool probing outside `internal/svgcheck`, likely under a future `internal/pdfx` package.
+
+Implementation sketch:
+
+- Add profile parsing plus `ProfilePDFXReady`.
+- Add profile-gated readiness issues from existing and future metadata: missing `viewBox`, missing explicit physical size for paper/packaging, external refs, unsafe scripts/events, raster images with unknown proof status, live text, RGB/web color assumptions, filters, masks, opacity, blend modes, shadows, and background transparency.
+- Phrase issues as "readiness blocker/risk before export", not "PDF/X invalid", because SVG source cannot prove final PDF conformance.
+- Preserve existing issue codes such as `rgb-colors-for-print` and `print-effects-require-flattening`; add PDF/X readiness codes as summary/profile findings, not replacements.
+
+Issue codes:
+
+- `pdfx-readiness-blocker`: error, rank high, for likely dependable handoff blockers under `--profile pdfx-ready`.
+- `pdfx-readiness-review`: warning, rank moderate, for proofing concerns that are not always blockers.
+- `pdfx-export-tool-missing`: info, only for explicit export/tool commands.
+- `pdfx-validation-unavailable`: info, only when validation was requested but no validator is configured.
+
+Tests and docs:
+
+- Add `TestPDFXReadyProfileFlagsExternalRefsAndEffects`.
+- Add `TestPDFXReadyProfileDoesNotRunByDefault`.
+- Add `TestPDFXReadyProfileSummarizesExistingPrintRisks`.
+- Use small inline SVG fixtures for readiness; no PDF fixtures are needed in the first slice.
+- Update README with `--profile pdfx-ready` examples and a clear "pre-export readiness, not PDF/X certification" note.
+
+Commit slices:
+
+1. Add `CheckOptions` and `--profile` plumbing.
+2. Add `pdfx-ready` profile findings using existing metadata.
+3. Add docs and CLI/WASM report serialization updates.
+4. Optionally add external tool probing.
+5. Optionally add export/validate bridge commands.
 
 ### 6. Transparency, Filters, Masks, And Flattening Risk Map
 
 Problem: soft effects are currently detected broadly, but the report does not identify the exact effect types or flattening risks.
 
-Initial shape:
+Owner: PDF Effects Agent, `gpt-5.5`, high thinking. Build a precise risk inventory while avoiding claims about exact rasterization or visual equivalence.
 
-- Inventory filters, filter references, masks, clip paths, opacity, blend modes, gradients with alpha, and CSS shadows.
-- Rank by target material and whether the effect is structural, visual, or likely to rasterize.
-- Keep unsafe removal gated behind `--unsafe`.
+CLI/API surface:
 
-Likely issue codes: `filter-flattening-risk`, `mask-flattening-risk`, `opacity-flattening-risk`, `blend-mode-flattening-risk`.
+- Add `--profile flattening-risk`.
+- Add summary fields to `SVGMeta` first; richer detailed slices can come later if reports need exact locations.
+- Consider a later `EffectRisk` detail model with `Kind`, `Element`, `ID`, `Ref`, `Count`, `Severity`, and `Rank`.
+
+Implementation sketch:
+
+- Extend inspection to inventory filter definitions and primitive names, filter references and referenced IDs, masks and mask references, clip paths and references, opacity attributes, blend modes, CSS filters/shadows, and gradient stops with alpha below 1.
+- Add helpers around existing `inspectAttrForPrintSignals` and `inspectStyle` instead of building a broad CSS parser.
+- Add `rankFlatteningRisk` helpers by target and effect kind.
+- Keep `fix --fix effects` unsafe and conservative.
+- For vinyl, laser, CNC, and plotter, keep aggregate `effects-may-not-output`; optionally emit granular codes only when `--profile flattening-risk` is set.
+
+Issue codes:
+
+- `filter-flattening-risk`: error, rank high for paper/packaging and `pdfx-ready`.
+- `mask-flattening-risk`: error, rank high for paper/packaging and `pdfx-ready`.
+- `blend-mode-flattening-risk`: error, rank high for paper/packaging and `pdfx-ready`.
+- `opacity-flattening-risk`: warning, rank moderate.
+- `alpha-gradient-flattening-risk`: warning, rank moderate.
+- `clip-path-output-risk`: warning, rank moderate.
+- `css-effect-flattening-risk`: warning, rank moderate.
+
+Tests and docs:
+
+- Test filter definition/reference, mask definition/reference, clip-path, group opacity, fill opacity, blend mode, gradient stop opacity, and CSS shadow.
+- Prove paper/packaging ranks severe effects high.
+- Prove screen stays quiet without an explicit profile.
+- Prove unsafe `fix --fix effects` still removes only supported constructs.
+- Map new effect issue codes to unsafe effects fixes in WASM metadata.
+- Update README to name effect categories rather than saying only "soft effects".
+
+Commit slices:
+
+1. Add effect inventory fields and tests.
+2. Add granular flattening issue generation.
+3. Wire CLI/WASM report output and fix-category mapping.
+4. Update README and roadmap wording.
 
 ### 7. Overprint, Knockout, White Ink, Underbase, And Spot-Layer Scenarios
 
@@ -233,13 +324,49 @@ Likely issue codes: `hidden-content`, `invisible-content`, `off-canvas-content`,
 
 Problem: many SVG features are valid for browsers but fragile in print, PDF export, static preview, or upload validators.
 
-Initial shape:
+Owner: PDF Effects Agent, `gpt-5.5`, high thinking. This profile should be explicit and stricter than normal web SVG validation.
 
-- Add a `static-svg` or `print-static` profile that warns on animation, interactive elements, remote resources, `foreignObject`, unsupported CSS, and renderer-sensitive references.
-- Keep the profile explicit so screen/web users are not punished for valid web SVG.
-- Use the profile as a foundation for upload validation and deterministic rendering.
+CLI/API surface:
 
-Likely issue codes: `animation-not-static`, `foreignobject-not-static`, `remote-resource-not-static`, `unsupported-css-for-static-svg`.
+- Add `--profile static-svg`.
+- Accept aliases `print-static` and `upload-static`.
+- Reuse the shared profile parsing from PDF/X and flattening-risk work.
+- Do not change default behavior for `screen` or web targets.
+
+Implementation sketch:
+
+- Add `ProfileStaticSVG`.
+- Extend `SVGMeta` with `AnimationElements`, `AnimatedAttrs`, `ForeignObjects`, `RemoteResources`, `UnsupportedStaticCSS`, and `FragmentReferenceRisks`.
+- Detect `<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>`, event attributes, `<foreignObject>`, remote `href`/`src`/CSS URLs, CSS animation/transition properties, and a small denylist of static-renderer-fragile CSS such as `position`, `z-index`, `display:flex`, `display:grid`, `backdrop-filter`, and `mix-blend-mode`.
+- Optionally detect unresolved `url(#missing)` after collecting IDs.
+- Do not take on hidden-content, off-canvas content, unused defs, or bloat unless directly tied to static renderer interoperability.
+
+Issue codes:
+
+- `animation-not-static`: warning, rank high.
+- `foreignobject-not-static`: warning, rank high.
+- `remote-resource-not-static`: warning, rank moderate.
+- `interactive-svg-not-static`: error, rank high, when scripts or event handlers appear under the static profile.
+- `unsupported-css-for-static-svg`: warning, rank moderate.
+- `renderer-sensitive-reference`: info, rank low, for unresolved or unusual local references if implemented.
+
+Tests and docs:
+
+- Add `TestStaticSVGProfileFlagsAnimationAndForeignObject`.
+- Add `TestStaticSVGProfileFlagsRemoteResources`.
+- Add `TestStaticSVGProfileDoesNotPunishScreenByDefault`.
+- Add `TestStaticSVGProfileFlagsUnsupportedCSS`.
+- Prefer inline SVG snippets; add `static-profile.svg` only if examples become hard to read.
+- Update README with `--profile static-svg` and explain that it is stricter than normal SVG validation.
+- Add a web demo profile selector only after CLI/API support lands.
+
+Commit slices:
+
+1. Add profile parsing shared with PDF/X and flattening.
+2. Add static SVG metadata detection.
+3. Add static profile issues and tests.
+4. Wire CLI/WASM profile output.
+5. Update README and roadmap.
 
 ## Suggested Commit Order
 
