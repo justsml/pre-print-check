@@ -43,6 +43,11 @@ Proposed Go API:
 type CheckOptions struct {
 	Target   string
 	Profiles []string
+	Width    string
+	Height   string
+	Bleed    string
+	SafeMargin string
+	BaseDir  string
 }
 
 func CheckWithOptions(input []byte, opts CheckOptions) (Report, error)
@@ -56,25 +61,87 @@ Keep `Check(input, rawTarget)` as a compatibility wrapper around `CheckWithOptio
 
 Problem: the checker sees root size metadata but cannot evaluate whether artwork has bleed, trim, or safe-area problems for a concrete product.
 
-Initial shape:
+Owner: Press Geometry Agent, `gpt-5.4`, high thinking. Implement this with gap 2 or in stacked branches because both need target-size resolution, unit conversion, and element-placement math.
 
-- Add target options for physical width, height, bleed, and safe margin.
-- Report content outside trim, content too close to trim, and backgrounds that stop at trim when bleed is required.
-- Keep fixes limited to simple background expansion when the geometry is unambiguous.
+CLI/API surface:
 
-Likely issue codes: `missing-bleed`, `unsafe-margin`, `content-outside-trim`, `target-size-mismatch`.
+- Add `--width`, `--height`, `--bleed`, and `--safe-margin` to `check` and `fix`.
+- Example: `pre-print check --target paper --width 4in --height 6in --bleed 0.125in --safe-margin 0.25in art.svg`.
+- Add matching `CheckOptions` and `FixOptions` fields.
+- Keep width-only target parsing backward compatible.
+
+Implementation sketch:
+
+- Extend `Target` with `HeightInches`, `BleedInches`, and `SafeMarginInches`.
+- Add shared length parsing helpers in `internal/svgcheck/target.go` instead of duplicating unit conversion.
+- Move layout math into `layout.go` or `production_layout.go`.
+- Replace count-only bleed/safe-area helpers with an analyzer that returns a trim box, bleed margin, safe margin, background-at-trim counts, non-background-near-trim counts, and non-background-outside-trim counts.
+- Treat the root `viewBox` as trim by default. Do not invent a separate bleed box unless the user supplies bleed.
+- Keep `fix` limited to simple full-background rectangle expansion when the geometry is unambiguous.
+
+Issue codes:
+
+- `missing-bleed`: keep existing-style warning, rank moderate.
+- `safe-area-risk`: warning, rank by count and distance. Keep this stable instead of renaming to `unsafe-margin`.
+- `content-outside-trim`: warning, usually rank high; suppress for background-like bleed elements.
+- `target-size-mismatch`: warning, rank moderate, when requested width/height aspect ratio materially disagrees with the SVG.
+
+Tests and docs:
+
+- Add `layout_test.go`.
+- Cover missing bleed on edge-to-edge background, explicit overhang pass, text/logo too close to trim, non-background art outside trim, and target aspect mismatch.
+- Add fixtures such as `print-edge-missing-bleed.svg`, `print-edge-safe-area.svg`, and `print-edge-content-outside-trim.svg`.
+- Update README with new size flags and the rule that `viewBox` is treated as trim.
+
+Commit slices:
+
+1. Add options/flag plumbing and shared unit parsing.
+2. Add trim/bleed/safe analyzers and issue codes.
+3. Wire bleed fix to the richer target model and update tests/docs.
 
 ### 2. Real Embedded Raster PPI Inspection
 
 Problem: current checks count raster images but do not decode local or inline images, inspect intrinsic dimensions, or compute effective PPI at production size.
 
-Initial shape:
+Owner: Press Geometry Agent, `gpt-5.4`, high thinking. Build on gap 1's target-size and placement model.
 
-- Decode data URI rasters and local linked images without fetching network resources.
-- Track image element bounds and transform scale where practical.
-- Report low or modest effective PPI based on target material and viewing distance.
+CLI/API surface:
 
-Likely issue codes: `low-raster-ppi`, `modest-raster-ppi`, `unknown-raster-size`, `external-raster-unmeasured`.
+- No extra required flags beyond the shared sizing flags.
+- Add `BaseDir` to checker options so `CheckFile` can resolve local `href="image.png"` safely relative to the SVG.
+- Keep network fetches disabled; only decode `data:` URIs and local relative files.
+
+Implementation sketch:
+
+- Add `internal/svgcheck/raster.go`.
+- Scan `<image>` elements and capture `href`, `width`, `height`, `x`, `y`, and `transform`.
+- Decode intrinsic raster dimensions from inline and local sources using stdlib `image`, PNG, JPEG, and GIF decoders first.
+- Consider `golang.org/x/image` support for WebP/TIFF/BMP only if broader fixture coverage justifies the dependency.
+- Compute effective PPI from placed size after scale. Limit transform support to axis-aligned `scale`, `translate`, and `matrix`; for rotate/skew, estimate conservatively or mark unknown.
+- Keep detailed per-image structs internal and emit aggregate issues to avoid noisy reports.
+- Leave `raster-not-cuttable` unchanged for cutter-like targets.
+
+Issue codes:
+
+- `low-raster-ppi`: warning, usually rank high.
+- `modest-raster-ppi`: info, rank moderate.
+- `unknown-raster-size`: warning, rank moderate, when placement exists but intrinsic pixels cannot be determined.
+- `external-raster-unmeasured`: info, rank low, for remote URLs or unresolved local refs.
+- Keep coarse `raster-image` and `inline-raster-image` presence signals only if detailed measurement is unavailable.
+
+Tests and docs:
+
+- Add `raster_test.go`.
+- Add tiny real fixtures under `internal/svgcheck/testdata/raster/`, such as `blue-300x300.png`, `photo-600x300.jpg`, and `icon-120x120.gif`.
+- Test inline PNG at good PPI, inline PNG at low PPI, local linked raster via `CheckFile`, remote URL unmeasured, and transformed image scale.
+- Update README to explain measured inline/local raster PPI and confirm remote resources are never fetched.
+- Narrow the current README limitation from "true image DPI/effective PPI" to unresolved/external images and transform ambiguity.
+
+Commit slices:
+
+1. Add path-aware checker options and raster inventory structs.
+2. Add inline/local raster decoding plus effective PPI calculation and thresholds.
+3. Add tests/fixtures and update README/demo copy.
 
 ### 3. Font And Live Text Preflight For Print
 
@@ -300,25 +367,102 @@ Commit slices:
 
 Problem: cutter-like targets need clean geometry, and current checks only cover raster/effect blockers, thin strokes, and some near-disconnected endpoints.
 
-Initial shape:
+Owner: Toolpath Agent, `gpt-5.4`, high thinking for geometry/parser slices. Keep `fix --fix cutter` advisory-only in v1.
 
-- Parse path commands enough to detect open paths, duplicate paths, self-intersections, tiny islands, overlapping cut lines, and stroke-only geometry.
-- Add target-specific thresholds for vinyl, plotter, laser, and CNC.
-- Keep operation-color conventions configurable because shops vary.
+CLI/API surface:
 
-Likely issue codes: `open-cut-path`, `duplicate-cut-path`, `self-intersecting-path`, `tiny-island`, `stroke-needs-outline`.
+- Extend existing `pre-print check --target vinyl|laser|cnc|plotter`.
+- Reuse overlay output to highlight locatable toolpath findings.
+- Extend `SVGMeta` and WASM `apiMeta` with counters such as `DuplicateToolpaths`, `DegenerateToolpathSegments`, `FilledOpenPaths`, `SelfIntersectingToolpaths`, and `DenseToolpaths`.
+- Do not add a generic `open-toolpath` issue in v1. Open centerlines can be valid for engraving/scoring; flag only open paths that visually imply a closed cut shape.
+
+Implementation sketch:
+
+- Add profile booleans such as `ReviewToolpathHealth` and `ReviewFilledOpenPaths` for vinyl, laser, CNC, and plotter.
+- Add `internal/svgcheck/toolpath.go`.
+- Build a reusable geometry pass that produces normalized contours/segments from `line`, `polyline`, `polygon`, and `path`.
+- Include affine transform-stack support for element/group `transform`; this is a release blocker for reliable toolpath health.
+- Canonicalize segments so reversed duplicates match.
+- Add bounded curve/arc flattening for `C`, `Q`, `S`, `T`, and `A` path commands.
+- Track contour metadata: closed/open, filled/stroked, segment count, total length, and minimum segment length.
+- Keep existing `near-disconnected-lines`, `thin-stroke`, and `small-detail-durability` behavior intact.
+- Add overlay highlight groups such as `pre-print-duplicate-toolpath-highlights`, `pre-print-degenerate-toolpath-highlights`, and `pre-print-self-intersection-highlights`.
+
+Issue codes:
+
+- `duplicate-toolpath`: error, rank high, for overlapping duplicate segments in either direction.
+- `degenerate-toolpath-segment`: warning, rank low/moderate/high by count.
+- `filled-open-path`: error for vinyl/plotter and warning for laser/CNC; rank moderate/high.
+- `self-intersecting-toolpath`: warning, rank moderate/high by intersection count.
+- `dense-toolpath`: info, rank moderate/high when segment count or very short median segment length suggests stutter, burn, chatter, or rough cutting.
+
+Tests and docs:
+
+- Add `toolpath_test.go`.
+- Add fixtures: `toolpath-duplicate-segments.svg`, `toolpath-degenerate-segments.svg`, `toolpath-filled-open-path.svg`, `toolpath-self-intersection.svg`, `toolpath-dense-nodes.svg`, and `toolpath-transformed-duplicates.svg`.
+- Assert issue code, severity, rank, and `SVGMeta` counters.
+- Add overlay tests that assert highlight group IDs/issue presence, not full SVG equality.
+- Update README to say v1 is check-only, not toolpath auto-repair.
+
+Commit slices:
+
+1. Add transformed contour/segment extraction without user-visible behavior changes.
+2. Add objective blocker checks: duplicate, degenerate, and filled-open paths.
+3. Add advisory checks: self-intersecting and dense toolpaths.
+4. Wire metadata counters, overlay highlights, and WASM/API exposure.
+5. Update README/docs/test corpus.
+6. Later, investigate a narrow `--fix cutter --unsafe` for exact duplicate removal only.
 
 ### 9. Hidden, Nonprinting, Off-Canvas, Or Bloated Content
 
 Problem: hidden or off-canvas content can unexpectedly print, affect bounds, bloat files, or slow downstream tools.
 
-Initial shape:
+Owner: Press Geometry Agent, `gpt-5.4`, high thinking. Reuse gap 1's trim/viewBox helpers and keep cleanup fixes separate from detection.
 
-- Detect `display:none`, `visibility:hidden`, zero opacity, zero-size objects, empty paths, unused defs, and content far outside the viewBox.
-- Report file bloat signals without rewriting authoring data by default.
-- Keep cleanup fixes separate from preflight checks.
+CLI/API surface:
 
-Likely issue codes: `hidden-content`, `invisible-content`, `off-canvas-content`, `unused-defs`, `empty-geometry`.
+- No initial new flags; run advisory detection by default in `check`.
+- Do not add auto-cleanup to `fix` in the first slice.
+- If cleanup lands later, make it a separate category, likely `cleanup`, and probably gate it with `--unsafe`.
+
+Implementation sketch:
+
+- Add `internal/svgcheck/visibility.go`.
+- Classify hidden content via `display:none`, `visibility:hidden`, zero opacity, zero-size geometry, and empty paths.
+- Detect elements fully outside the trim/viewBox by a meaningful distance.
+- Collect IDs defined in `<defs>` and IDs referenced via `url(#id)`, `href="#id"`, and `xlink:href="#id"`.
+- Keep detection conservative: `opacity:0` and `display:none` are strong signals; `fill="none"` alone is not.
+- Treat zero-area bounds plus no stroke as a stronger empty-geometry signal than zero bounds alone.
+- Start bloat detection with lightweight heuristics: large inline data URIs in hidden/off-canvas elements, many unused defs, or hidden/off-canvas content that appears to be a meaningful share of the file.
+
+Issue codes:
+
+- `hidden-content`: info, rank by count/bytes.
+- `invisible-content`: info, rank low.
+- `off-canvas-content`: warning, rank moderate/high when far outside trim or numerous.
+- `unused-defs`: info, rank low.
+- `empty-geometry`: info, rank low.
+- `bloated-content`: warning, rank moderate/high when hidden or unreachable payload is materially large.
+
+Tests and docs:
+
+- Add `visibility_test.go`.
+- Cover `display:none` groups, `visibility:hidden` shapes, zero-opacity placed images, empty paths, zero-size rects, unused defs, and off-canvas art far beyond the viewBox.
+- Generate large hidden data URIs in test code rather than checking in a giant SVG fixture.
+- Update README to frame these as advisory cleanup signals.
+
+Commit slices:
+
+1. Add hidden/invisible/empty/off-canvas inventory and issues.
+2. Add defs reference tracking and `unused-defs`.
+3. Add heuristic `bloated-content`, tests, and README/demo updates.
+
+Sequencing:
+
+1. Add shared options plumbing for `CheckOptions`, width, height, bleed, safe margin, and base dir.
+2. Build the gap 1 geometry model.
+3. Build gap 2 raster measurement on top of that model.
+4. Build gap 9 visibility/bloat checks reusing the same trim and bounds helpers.
 
 ### 10. Static SVG Interoperability Profile
 
@@ -386,3 +530,11 @@ Every feature should update:
 - This roadmap if scope changes while implementing.
 - Any web demo copy under `docs/` when new report fields appear there.
 - Tests beside the package they cover.
+
+## Cross-Cutting Test Strategy
+
+- Prefer semantic report assertions over full rendered-report snapshots.
+- Keep behavior tests in `internal/svgcheck`; keep CLI tests focused on argument parsing, exit codes, and write paths.
+- For fixer work, use round-trip tests: `Check`, then `Fix`, then `Check`, and assert only intended issues disappear.
+- Add fuzz targets for untrusted SVG handling on `Check`, `Fix`, and `GenerateOverlay` after the geometry and profile APIs settle.
+- Maintain at least one transformed fixture and one malformed-but-parseable fixture in the shared corpus because they exercise many roadmap gaps without redefining their scope.
