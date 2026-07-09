@@ -92,3 +92,7 @@ SVG is a web/vector interchange format, so some production facts cannot be prove
 - RIP-specific handling of transparency, blend modes, masks, filters, and shadows
 
 For press output, use this tool before exporting or reviewing the final press-ready PDF. Then confirm the printer's product template, bleed, trim, safe zone, color, font, image-resolution, and proofing requirements.
+
+## Roadmap
+
+See [docs/preflight-roadmap.md](docs/preflight-roadmap.md) for the planned production-preflight gaps, implementation handoffs, and suggested agent assignments.
