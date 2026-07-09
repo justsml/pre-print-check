@@ -134,10 +134,44 @@ async function bootWasm() {
     setStatus("Ready", "ready");
     el.summaryLine.textContent = "Local SVG preflight";
     addLog("WASM runtime ready", "ok");
+    await loadRoutePreset();
   } catch (error) {
     setStatus("Build needed", "error");
     el.summaryLine.textContent = "Run make wasm, then refresh";
     addLog(error.message || String(error), "error");
+  }
+}
+
+async function loadRoutePreset() {
+  const params = new URLSearchParams(window.location.search);
+  const target = params.get("target");
+  const sample = params.get("sample");
+  const view = params.get("view");
+
+  if (target) {
+    const targetOption = Array.from(el.targetSelect.options).find((option) => option.value === target);
+    if (targetOption) {
+      el.targetSelect.value = target;
+    } else {
+      el.targetSelect.value = "custom";
+      el.customTarget.value = target;
+      el.customTargetWrap.classList.remove("hidden");
+    }
+  }
+
+  if (sample) {
+    const option = Array.from(el.sampleSelect.options).find((item) => {
+      return item.value === sample || item.textContent.trim().toLowerCase() === sample.toLowerCase();
+    });
+    if (option) {
+      el.sampleSelect.value = option.value;
+      await loadSample();
+    }
+  }
+
+  if (view && document.querySelector(`[data-view="${CSS.escape(view)}"]`)) {
+    state.view = view;
+    render();
   }
 }
 

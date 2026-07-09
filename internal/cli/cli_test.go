@@ -4,9 +4,40 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestRunDefaultsToCheckCommand(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "input.svg")
+	if err := os.WriteFile(inputPath, []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" viewBox="0 0 100 50"><rect width="100" height="50" /></svg>`), 0o644); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	tests := [][]string{
+		{inputPath},
+		{"--target", "paper", inputPath},
+		{"check", "--target", "paper", inputPath},
+	}
+
+	for _, args := range tests {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := Run(args, &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("Run(%v) returned %d, stderr=%s stdout=%s", args, code, stderr.String(), stdout.String())
+			}
+			if !strings.Contains(stdout.String(), "SVG:") {
+				t.Fatalf("expected check report, got stdout=%s", stdout.String())
+			}
+			if slices.Contains(args, "paper") && !strings.Contains(stdout.String(), "Target: paper") {
+				t.Fatalf("expected target in report, got stdout=%s", stdout.String())
+			}
+		})
+	}
+}
 
 func TestRunFixWithCategoryFlag(t *testing.T) {
 	dir := t.TempDir()

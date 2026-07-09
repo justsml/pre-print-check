@@ -1,8 +1,28 @@
 # pre-print-check
 
+![Go 1.24](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)
+![CLI](https://img.shields.io/badge/interface-CLI-111111)
+![WASM](https://img.shields.io/badge/runtime-WASM-654FF0?logo=webassembly&logoColor=white)
+![Local only](https://img.shields.io/badge/privacy-local_only-2F855A)
+![SVG](https://img.shields.io/badge/input-SVG-B3401E)
+![Print preflight](https://img.shields.io/badge/workflow-print_preflight-C47F17)
+
 `pre-print-check` is a local SVG preflight and repair tool for artwork headed to paper, packaging, fabric, vinyl, signage, banners, vehicle wraps, laser engraving, CNC, plotters, and web output.
 
-It is intentionally conservative. It catches risks that are visible in the SVG source, explains why they matter, and only applies automatic fixes when the change is narrow enough to trust. It does not replace a printer proof, RIP, cutter setup, or press-ready PDF workflow. It gives you the earlier, cheaper warning.
+It catches production risks that are visible in SVG source, gives them stable issue codes, and applies only conservative automatic fixes by default. It does not replace a printer proof, RIP, cutter setup, or press-ready PDF workflow. It gives you the earlier, cheaper warning.
+
+<p>
+  <img src="docs/assets/playground.png" alt="pre-print-check browser playground showing an SVG overlay, summary counts, metadata, and preflight issues" width="900">
+</p>
+
+## Highlights
+
+- **Default check command:** run `pre-print-check art.svg`; the explicit `check` subcommand still works.
+- **Material-aware targets:** paper, packaging, fabric, vinyl, banners, signage, vehicle wraps, laser, CNC, plotters, screen, and physical sizes.
+- **Stable issue codes:** scriptable findings such as `missing-viewbox`, `raster-not-cuttable`, `thin-stroke`, and `missing-bleed`.
+- **Visual overlays:** generate an annotated SVG overlay for locatable production risks.
+- **Safe fixes first:** metadata and simple bleed repairs by default; destructive changes require `--unsafe`.
+- **Local JS runtime:** the npm package wraps the Go engine compiled to WASM; SVG input stays in the process/browser.
 
 ## Why It Exists
 
@@ -21,7 +41,7 @@ Build the native CLI from this repository:
 
 ```sh
 make build
-./pre-print-check check --target vinyl art.svg
+./pre-print-check --target vinyl art.svg
 ```
 
 Or use the WASM package from JavaScript:
@@ -55,20 +75,20 @@ The npm package is a wrapper around the same Go engine compiled to WebAssembly. 
 Check one SVG:
 
 ```sh
-./pre-print-check check --target paper art.svg
+./pre-print-check --target paper art.svg
 ```
 
 Write a Markdown or HTML report:
 
 ```sh
-./pre-print-check check --target vinyl --format md art.svg > report.md
-./pre-print-check check --target banner@20ft --format html art.svg > report.html
+./pre-print-check --target vinyl --format md art.svg > report.md
+./pre-print-check --target banner@20ft --format html art.svg > report.html
 ```
 
 Generate a visual overlay for locatable production risks:
 
 ```sh
-./pre-print-check check --target paper --overlay art.overlay.svg art.svg
+./pre-print-check --target paper --overlay art.overlay.svg art.svg
 ```
 
 Apply safe automatic fixes to a copy:
@@ -103,6 +123,13 @@ Targets can describe an output material, a physical size, a resolution, or a mat
 ./pre-print-check check --target 1.2m art.svg
 ./pre-print-check check --target 4k art.svg
 ./pre-print-check check --target 8k art.svg
+```
+
+The `check` subcommand is optional in these examples:
+
+```sh
+./pre-print-check --target paper art.svg
+./pre-print-check --target fabric@14in art.svg
 ```
 
 Supported material intents:
@@ -226,6 +253,12 @@ make serve-web
 Then open `http://127.0.0.1:8765/docs/`.
 
 The demo loads SVGs locally, shows the original/overlay/source views, applies safe fixes, and can download the repaired SVG or issue overlay.
+
+You can preload the playground with a bundled sample for screenshots or demos:
+
+```txt
+http://127.0.0.1:8765/docs/?sample=Effects%20and%20shadows&target=paper&view=overlay
+```
 
 ## Development
 

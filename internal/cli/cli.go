@@ -14,11 +14,12 @@ import (
 const usage = `pre-print-check validates and repairs SVGs for print and web.
 
 Usage:
+  pre-print-check [--target screen|paper|fabric|vinyl|20ft|4k] [--format terminal|md|html] [--overlay OUTPUT.svg] FILE.svg
   pre-print-check check [--target screen|paper|fabric|vinyl|20ft|4k] [--format terminal|md|html] [--overlay OUTPUT.svg] FILE.svg
   pre-print-check fix [--target TARGET] [--fix all|metadata,safety,...] [--unsafe] [-o OUTPUT.svg] FILE.svg
 
 Commands:
-  check    Report print/web risks in an SVG
+  check    Report print/web risks in an SVG; this is the default command
   fix      Apply conservative automatic SVG fixes
 `
 
@@ -37,8 +38,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, usage)
 		return 0
 	default:
-		fmt.Fprintf(stderr, "unknown command %q\n\n%s", args[0], usage)
-		return 2
+		return runCheck(args, stdout, stderr)
 	}
 }
 
