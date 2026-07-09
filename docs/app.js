@@ -30,6 +30,7 @@ const el = {
   sourceInput: document.querySelector("#sourceInput"),
   visualPane: document.querySelector("#visualPane"),
   reportSummary: document.querySelector("#reportSummary"),
+  targetLine: document.querySelector("#targetLine"),
   errorCount: document.querySelector("#errorCount"),
   warningCount: document.querySelector("#warningCount"),
   infoCount: document.querySelector("#infoCount"),
@@ -38,20 +39,13 @@ const el = {
   activityLog: document.querySelector("#activityLog"),
 };
 
-const severityStyles = {
-  error: "bg-rose-500 text-rose-700",
-  warning: "bg-amber-500 text-amber-700",
-  info: "bg-sky-500 text-sky-700",
-};
-
 document.addEventListener("DOMContentLoaded", () => {
   wireEvents();
+  wireDragDrop();
   setControlsEnabled(false);
   render();
   bootWasm();
-  if (window.lucide) {
-    window.lucide.createIcons();
-  }
+  refreshIcons();
 });
 
 function wireEvents() {
@@ -62,6 +56,9 @@ function wireEvents() {
     analyzeCurrent();
   });
   el.customTarget.addEventListener("change", analyzeCurrent);
+  el.customTarget.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") analyzeCurrent();
+  });
   el.unsafeToggle.addEventListener("change", renderIssues);
   el.analyzeButton.addEventListener("click", analyzeCurrent);
   el.fixSafeButton.addEventListener("click", () => applyFixes(["metadata", "bleed"], false));
@@ -82,11 +79,51 @@ function wireEvents() {
       render();
     });
   });
+  document.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      analyzeCurrent();
+    }
+  });
+}
+
+function wireDragDrop() {
+  const pane = el.visualPane;
+  let depth = 0;
+  pane.addEventListener("dragenter", (event) => {
+    event.preventDefault();
+    depth++;
+    pane.classList.add("is-dragging");
+  });
+  pane.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  });
+  pane.addEventListener("dragleave", () => {
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) pane.classList.remove("is-dragging");
+  });
+  pane.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    depth = 0;
+    pane.classList.remove("is-dragging");
+    const file = event.dataTransfer.files?.[0];
+    if (!file) return;
+    if (!/\.svg$/i.test(file.name) && file.type !== "image/svg+xml") {
+      addLog("Drop an .svg file", "error");
+      return;
+    }
+    const text = await file.text();
+    setSVG(text, file.name);
+    addLog(`Loaded ${file.name}`);
+    await analyzeCurrent();
+  });
 }
 
 async function bootWasm() {
   try {
-    setStatus("Loading", "bg-sky-100 text-sky-700", "bg-sky-500");
+    setStatus("Loading", "loading");
+    el.summaryLine.textContent = "loading runtime…";
     const go = new Go();
     const response = await fetch("../dist/pre-print.wasm");
     const result = await instantiateWasm(response, go.importObject);
@@ -94,13 +131,13 @@ async function bootWasm() {
     await waitFor(() => window.prePrintTools?.ready);
     state.wasmReady = true;
     setControlsEnabled(true);
-    setStatus("Ready", "bg-emerald-100 text-emerald-700", "bg-emerald-500");
+    setStatus("Ready", "ready");
     el.summaryLine.textContent = "Local SVG preflight";
-    addLog("WASM runtime ready");
+    addLog("WASM runtime ready", "ok");
   } catch (error) {
-    setStatus("Build needed", "bg-amber-100 text-amber-800", "bg-amber-500");
+    setStatus("Build needed", "error");
     el.summaryLine.textContent = "Run make wasm, then refresh";
-    addLog(error.message || String(error), "border-amber-400");
+    addLog(error.message || String(error), "error");
   }
 }
 
@@ -147,7 +184,7 @@ async function loadSample() {
   if (!el.sampleSelect.value) return;
   const response = await fetch(el.sampleSelect.value);
   if (!response.ok) {
-    addLog(`Could not load sample: ${response.status}`, "border-rose-400");
+    addLog(`Could not load sample: ${response.status}`, "error");
     return;
   }
   const text = await response.text();
@@ -193,7 +230,7 @@ function callTool(name, svg, options) {
 async function applyReportFixes() {
   const categories = state.report?.fixCategories || [];
   if (categories.length === 0) {
-    addLog("No automatic fixes are available");
+    addLog("No automatic fixes are available", "warn");
     return;
   }
   await applyFixes(categories, el.unsafeToggle.checked);
@@ -202,7 +239,7 @@ async function applyReportFixes() {
 async function applyIssueFix(category, unsafeRequired) {
   if (!category) return;
   if (unsafeRequired && !el.unsafeToggle.checked) {
-    addLog("Enable unsafe fixes for that change", "border-amber-400");
+    addLog("Enable unsafe fixes for that change", "warn");
     return;
   }
   await applyFixes([category], unsafeRequired || el.unsafeToggle.checked);
@@ -225,13 +262,13 @@ async function applyFixes(categories, unsafe) {
     refreshPreview();
     render();
     if (response.changes?.length) {
-      response.changes.forEach((change) => addLog(change, "border-emerald-400"));
+      response.changes.forEach((change) => addLog(change, "ok"));
     } else {
-      addLog("No SVG changes were needed");
+      addLog("No SVG changes were needed", "warn");
     }
-    response.skipped?.forEach((skipped) => addLog(skipped, "border-amber-400"));
+    response.skipped?.forEach((skipped) => addLog(skipped, "warn"));
   } catch (error) {
-    addLog(error.message || String(error), "border-rose-400");
+    addLog(error.message || String(error), "error");
   }
 }
 
@@ -277,9 +314,7 @@ function render() {
   refreshPreview();
   renderReport();
   renderIssues();
-  if (window.lucide) {
-    window.lucide.createIcons();
-  }
+  refreshIcons();
 }
 
 function renderReport() {
@@ -288,74 +323,114 @@ function renderReport() {
   el.errorCount.textContent = report?.counts?.errors ?? 0;
   el.warningCount.textContent = report?.counts?.warnings ?? 0;
   el.infoCount.textContent = report?.counts?.info ?? 0;
+  el.targetLine.textContent = report?.targetDetails || "";
 
   const meta = report?.meta || {};
+  const raster = (meta.rasterImages ?? 0) + (meta.inlineRasterImages ?? 0);
+  const effects = (meta.filters ?? 0) + (meta.filterRefs ?? 0) + (meta.shadows ?? 0);
   const rows = [
     ["Width", meta.width || "-"],
     ["Height", meta.height || "-"],
     ["ViewBox", meta.viewBox || "-"],
     ["Colors", meta.uniqueColors ?? 0],
-    ["Raster", (meta.rasterImages ?? 0) + (meta.inlineRasterImages ?? 0)],
-    ["Effects", (meta.filters ?? 0) + (meta.filterRefs ?? 0) + (meta.shadows ?? 0)],
+    ["Raster", raster],
+    ["Effects", effects],
     ["Thin", meta.thinStrokes ?? 0],
     ["Gaps", meta.nearDisconnected ?? 0],
   ];
-  el.metaGrid.innerHTML = rows.map(([term, value]) => `
-    <div>
-      <dt>${escapeHTML(term)}</dt>
-      <dd>${escapeHTML(String(value))}</dd>
-    </div>
-  `).join("");
+  el.metaGrid.innerHTML = rows.map(([term, value]) => {
+    const isZero = value === 0 || value === "0";
+    return `
+      <div>
+        <dt>${escapeHTML(term)}</dt>
+        <dd${isZero ? ' data-zero="true"' : ""}>${escapeHTML(String(value))}</dd>
+      </div>
+    `;
+  }).join("");
 }
 
 function renderIssues() {
   const issues = state.report?.issues || [];
   if (issues.length === 0) {
-    el.issuesList.innerHTML = `<div class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">No issues reported</div>`;
+    const clean = Boolean(state.report);
+    el.issuesList.innerHTML = clean
+      ? `<div class="issues-empty is-clean">
+          <i data-lucide="check-circle-2" class="h-5 w-5"></i>
+          No issues reported
+        </div>`
+      : `<div class="issues-empty">Analyze an SVG to see issues</div>`;
+    refreshIcons();
     return;
   }
 
   el.issuesList.innerHTML = issues.map((issue, index) => {
-    const styles = severityStyles[issue.severity] || severityStyles.info;
+    const sev = issue.severity || "info";
     const canApply = issue.automaticFix && (!issue.unsafeRequired || el.unsafeToggle.checked);
+    const actionKind = issue.automaticFix
+      ? (issue.unsafeRequired && !el.unsafeToggle.checked ? "locked" : "apply")
+      : "manual";
     const actionText = issue.automaticFix
       ? issue.unsafeRequired && !el.unsafeToggle.checked
         ? "Needs unsafe"
         : `Apply ${issue.fixCategory}`
       : "Manual";
+    const actionIcon = issue.automaticFix ? "wand-sparkles" : "hand";
     return `
-      <article class="issue-card" tabindex="0">
-        <div class="flex items-start justify-between gap-3">
-          <div class="min-w-0">
-            <div class="flex items-center gap-2">
-              <span class="severity-mark ${styles.split(" ")[0]}"></span>
-              <span class="truncate text-sm font-semibold text-slate-950">${escapeHTML(issue.code)}</span>
+      <article class="issue-card" data-sev="${escapeHTML(sev)}" data-expanded="false" tabindex="0">
+        <div class="issue-head">
+          <div class="issue-main">
+            <div class="issue-code-row">
+              <span class="severity-mark"></span>
+              <span class="issue-code">${escapeHTML(issue.code)}</span>
             </div>
-            <div class="mt-1 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase text-slate-500">
-              <span class="${styles.split(" ")[1]}">${escapeHTML(issue.severity)}</span>
-              ${issue.rank ? `<span>${escapeHTML(issue.rank)}</span>` : ""}
+            <div class="issue-tags">
+              <span class="issue-tag" data-sev="${escapeHTML(sev)}">${escapeHTML(issue.severity)}</span>
+              ${issue.rank ? `<span class="issue-tag is-rank">${escapeHTML(issue.rank)}</span>` : ""}
             </div>
           </div>
           <button
-            class="command-button h-8 ${canApply ? "bg-white text-slate-800 hover:bg-slate-50" : "bg-slate-100 text-slate-400"}"
+            class="issue-action"
+            data-kind="${actionKind}"
             data-issue-fix="${index}"
             ${canApply ? "" : "disabled"}
           >
-            <i data-lucide="${issue.automaticFix ? "wand-sparkles" : "hand"}" class="h-3.5 w-3.5"></i>
+            <i data-lucide="${actionIcon}" class="h-3.5 w-3.5"></i>
             ${escapeHTML(actionText)}
           </button>
         </div>
-        <p class="issue-message">${escapeHTML(issue.message)}</p>
+        <div class="issue-message">${escapeHTML(issue.message)}</div>
+        <button class="issue-toggle" data-issue-toggle="${index}" aria-label="Toggle details"></button>
       </article>
     `;
   }).join("");
 
   el.issuesList.querySelectorAll("[data-issue-fix]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
       const issue = issues[Number(button.dataset.issueFix)];
       applyIssueFix(issue.fixCategory, issue.unsafeRequired);
     });
   });
+  el.issuesList.querySelectorAll("[data-issue-toggle]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const card = button.closest(".issue-card");
+      const expanded = card.dataset.expanded === "true";
+      card.dataset.expanded = expanded ? "false" : "true";
+    });
+  });
+  el.issuesList.querySelectorAll(".issue-card").forEach((card) => {
+    card.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        if (event.target === card) {
+          event.preventDefault();
+          const expanded = card.dataset.expanded === "true";
+          card.dataset.expanded = expanded ? "false" : "true";
+        }
+      }
+    });
+  });
+  refreshIcons();
 }
 
 function setControlsEnabled(enabled) {
@@ -375,21 +450,26 @@ function setControlsEnabled(enabled) {
   });
 }
 
-function setStatus(text, pillClass, dotClass) {
-  el.runtimeStatus.className = `status-pill ${pillClass}`;
-  el.runtimeStatus.innerHTML = `<span class="status-dot ${dotClass}"></span>${escapeHTML(text)}`;
+function setStatus(text, state) {
+  el.runtimeStatus.dataset.state = state;
+  let dotColor = "";
+  if (state === "ready") dotColor = "ok";
+  else if (state === "error") dotColor = "error";
+  else if (state === "loading") dotColor = "info";
+  el.runtimeStatus.innerHTML = `<span class="status-dot" data-level="${dotColor}"></span>${escapeHTML(text)}`;
 }
 
-function addLog(message, border = "border-slate-300") {
+function addLog(message, level = "info") {
   const item = document.createElement("div");
-  item.className = `activity-item ${border}`;
+  item.className = "activity-item";
+  item.dataset.level = level;
   item.textContent = message;
   el.activityLog.prepend(item);
 }
 
 function downloadText(text, filename, type) {
   if (!text?.trim()) {
-    addLog("Nothing to download", "border-amber-400");
+    addLog("Nothing to download", "warn");
     return;
   }
   const url = URL.createObjectURL(new Blob([text], { type }));
@@ -402,6 +482,12 @@ function downloadText(text, filename, type) {
 
 function fileStem() {
   return (state.fileName || "art").replace(/\.svg$/i, "") || "art";
+}
+
+function refreshIcons() {
+  if (window.lucide) {
+    window.lucide.createIcons();
+  }
 }
 
 function escapeHTML(value) {
