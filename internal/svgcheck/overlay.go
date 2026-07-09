@@ -42,15 +42,16 @@ func GenerateOverlay(input []byte, opts OverlayOptions) ([]byte, error) {
 	viewBox := overlayViewBox(data.Meta)
 	minX, minY, width, height := parseViewBoxOrDefault(viewBox)
 	scale := overlayScale(width, height)
-	panelWidth := width * 0.42
-	if panelWidth < 180*scale {
-		panelWidth = 180 * scale
+	panelScale := scale * 1.25
+	panelWidth := width * 0.50
+	if panelWidth < 280*panelScale {
+		panelWidth = 280 * panelScale
 	}
 	if panelWidth > width*0.72 {
 		panelWidth = width * 0.72
 	}
-	panelX := minX + width - panelWidth - 18*scale
-	panelY := minY + 18*scale
+	panelX := minX + width - panelWidth - 18*panelScale
+	panelY := minY + 18*panelScale
 
 	out.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	fmt.Fprintf(&out, `<svg xmlns="http://www.w3.org/2000/svg" width="%s" height="%s" viewBox="%s">`+"\n",
@@ -67,7 +68,7 @@ func GenerateOverlay(input []byte, opts OverlayOptions) ([]byte, error) {
 	out.WriteString(`<g id="pre-print-check-overlay" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">` + "\n")
 	writeThinShapeHighlights(&out, data.ThinShapes, scale)
 	writeNearDisconnectedHighlights(&out, data.Endpoints, scale)
-	writeOverlayPanel(&out, data.Report, panelX, panelY, panelWidth, scale)
+	writeOverlayPanel(&out, data.Report, panelX, panelY, panelWidth, panelScale)
 	out.WriteString("</g>\n</svg>\n")
 	return []byte(out.String()), nil
 }
@@ -169,19 +170,19 @@ func writeNearDisconnectedHighlights(out *strings.Builder, endpoints []geometryE
 
 func writeOverlayPanel(out *strings.Builder, report Report, x, y, width, scale float64) {
 	errors, warnings, info := report.IssueCounts()
-	lineHeight := 15 * scale
-	height := (78 + float64(min(len(report.Issues), 6))*15) * scale
+	lineHeight := 18 * scale
+	height := (96 + float64(min(len(report.Issues), 6))*18) * scale
 	fmt.Fprintf(out, `<g id="pre-print-check-overlay-panel" transform="translate(%s %s)" filter="url(#ppt-overlay-shadow)">`+"\n", trimFloat(x), trimFloat(y))
 	fmt.Fprintf(out, `<rect x="0" y="0" width="%s" height="%s" rx="%s" fill="#0f172a" opacity="0.92"/>`+"\n", trimFloat(width), trimFloat(height), trimFloat(10*scale))
-	fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" font-weight="800" fill="#ffffff">Pre-print overlay</text>`+"\n", trimFloat(14*scale), trimFloat(23*scale), trimFloat(14*scale))
-	fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" fill="#cbd5e1">%d error(s) · %d warning(s) · %d note(s)</text>`+"\n", trimFloat(14*scale), trimFloat(42*scale), trimFloat(10*scale), errors, warnings, info)
-	fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" fill="#93c5fd">%s</text>`+"\n", trimFloat(14*scale), trimFloat(59*scale), trimFloat(9*scale), escapeText(overlayMetaSummary(report)))
+	fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" font-weight="800" fill="#ffffff">Pre-print overlay</text>`+"\n", trimFloat(16*scale), trimFloat(27*scale), trimFloat(16*scale))
+	fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" fill="#cbd5e1">%d error(s) · %d warning(s) · %d note(s)</text>`+"\n", trimFloat(16*scale), trimFloat(50*scale), trimFloat(12*scale), errors, warnings, info)
+	fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" fill="#93c5fd">%s</text>`+"\n", trimFloat(16*scale), trimFloat(70*scale), trimFloat(10.5*scale), escapeText(overlayMetaSummary(report)))
 
-	yCursor := 80 * scale
+	yCursor := 96 * scale
 	for i, issue := range report.Issues {
 		if i >= 6 {
 			remaining := len(report.Issues) - i
-			fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" fill="#94a3b8">+ %d more in the terminal report</text>`+"\n", trimFloat(14*scale), trimFloat(yCursor), trimFloat(9*scale), remaining)
+			fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" fill="#94a3b8">+ %d more in the terminal report</text>`+"\n", trimFloat(16*scale), trimFloat(yCursor), trimFloat(10.5*scale), remaining)
 			break
 		}
 		color := severityColor(issue.Severity)
@@ -189,9 +190,9 @@ func writeOverlayPanel(out *strings.Builder, report Report, x, y, width, scale f
 		if issue.Rank != "" {
 			rank = " / " + string(issue.Rank)
 		}
-		fmt.Fprintf(out, `<circle cx="%s" cy="%s" r="%s" fill="%s"/>`+"\n", trimFloat(18*scale), trimFloat(yCursor-3*scale), trimFloat(3*scale), color)
+		fmt.Fprintf(out, `<circle cx="%s" cy="%s" r="%s" fill="%s"/>`+"\n", trimFloat(21*scale), trimFloat(yCursor-4*scale), trimFloat(3.5*scale), color)
 		fmt.Fprintf(out, `<text x="%s" y="%s" font-size="%s" fill="#e2e8f0">%s%s: %s</text>`+"\n",
-			trimFloat(27*scale), trimFloat(yCursor), trimFloat(8.6*scale), escapeText(string(issue.Severity)), escapeText(rank), escapeText(issue.Code))
+			trimFloat(32*scale), trimFloat(yCursor), trimFloat(10.5*scale), escapeText(string(issue.Severity)), escapeText(rank), escapeText(issue.Code))
 		yCursor += lineHeight
 	}
 	out.WriteString("</g>\n")
