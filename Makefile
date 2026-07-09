@@ -1,4 +1,4 @@
-.PHONY: build test vet wasm npm-test serve-web
+.PHONY: build test vet go-package-check wasm npm-test serve-web
 
 build:
 	go build -o pre-print-check .
@@ -8,6 +8,10 @@ test:
 
 vet:
 	go vet ./...
+
+go-package-check:
+	go list ./svgcheck
+	go test ./svgcheck
 
 wasm:
 	mkdir -p dist

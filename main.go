@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/dan/pre-print-check/internal/cli"
+	"github.com/justsml/pre-print-check/internal/cli"
 )
 
 func main() {

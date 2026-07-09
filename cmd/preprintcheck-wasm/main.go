@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall/js"
 
-	"github.com/dan/pre-print-check/internal/svgcheck"
+	"github.com/justsml/pre-print-check/internal/svgcheck"
 )
 
 type apiResponse struct {

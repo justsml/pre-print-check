@@ -44,6 +44,18 @@ make build
 ./pre-print-check --target vinyl art.svg
 ```
 
+Install the CLI with Go:
+
+```sh
+go install github.com/justsml/pre-print-check@latest
+```
+
+Use the Go package in another project:
+
+```sh
+go get github.com/justsml/pre-print-check/svgcheck
+```
+
 Or use the WASM package from JavaScript:
 
 ```sh
@@ -69,6 +81,52 @@ const repaired = await fix(svg, {
 ```
 
 The npm package is a wrapper around the same Go engine compiled to WebAssembly. It runs locally in Node or the browser and does not upload SVG input.
+
+## Go API
+
+The public Go package is available at `github.com/justsml/pre-print-check/svgcheck`:
+
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/justsml/pre-print-check/svgcheck"
+)
+
+func main() {
+	input, err := os.ReadFile("art.svg")
+	if err != nil {
+		panic(err)
+	}
+
+	report, err := svgcheck.Check(input, "vinyl")
+	if err != nil {
+		panic(err)
+	}
+
+	for _, issue := range report.Issues {
+		fmt.Printf("[%s] %s: %s\n", issue.Severity, issue.Code, issue.Message)
+	}
+}
+```
+
+The package exposes the same core engine used by the CLI and WASM package:
+
+- `svgcheck.Check` and `svgcheck.CheckFile` for reports.
+- `svgcheck.GenerateOverlay` for visual issue overlays.
+- `svgcheck.Fix` for conservative SVG repairs.
+- `svgcheck.ParseTarget`, target constants, issue severities, ranks, and fix categories.
+
+To publish a new Go package version, tag the module with a semantic version and push the tag:
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+GOPROXY=proxy.golang.org go list -m github.com/justsml/pre-print-check@v0.2.0
+```
 
 ## Quick Start
 
@@ -114,22 +172,15 @@ Allow destructive repairs only when you mean it:
 Targets can describe an output material, a physical size, a resolution, or a material plus size.
 
 ```sh
-./pre-print-check check --target screen art.svg
-./pre-print-check check --target paper art.svg
-./pre-print-check check --target vinyl art.svg
-./pre-print-check check --target fabric@14in art.svg
-./pre-print-check check --target banner@20ft art.svg
-./pre-print-check check --target 90in art.svg
-./pre-print-check check --target 1.2m art.svg
-./pre-print-check check --target 4k art.svg
-./pre-print-check check --target 8k art.svg
-```
-
-The `check` subcommand is optional in these examples:
-
-```sh
+./pre-print-check --target screen art.svg
 ./pre-print-check --target paper art.svg
+./pre-print-check --target vinyl art.svg
 ./pre-print-check --target fabric@14in art.svg
+./pre-print-check --target banner@20ft art.svg
+./pre-print-check --target 90in art.svg
+./pre-print-check --target 1.2m art.svg
+./pre-print-check --target 4k art.svg
+./pre-print-check --target 8k art.svg
 ```
 
 Supported material intents:

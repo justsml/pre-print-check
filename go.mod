@@ -1,3 +1,3 @@
-module github.com/dan/pre-print-check
+module github.com/justsml/pre-print-check
 
 go 1.24

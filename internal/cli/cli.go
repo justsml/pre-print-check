@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dan/pre-print-check/internal/svgcheck"
+	"github.com/justsml/pre-print-check/internal/svgcheck"
 )
 
 const usage = `pre-print-check validates and repairs SVGs for print and web.
