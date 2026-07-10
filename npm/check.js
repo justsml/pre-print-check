@@ -2,7 +2,7 @@ import { createRuntime } from "./runtime.js";
 
 const runtime = createRuntime({
   wasmURL: new URL("../dist/pre-print-check-check.wasm", import.meta.url),
-  globalName: "prePrintCheckCheck",
+  globalName: "prePrintCheck",
   capabilities: ["check"],
 });
 
