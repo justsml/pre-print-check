@@ -1,6 +1,7 @@
 # pre-print-check
 
 ![Go 1.24](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)
+![Node 22+](https://img.shields.io/badge/Node-22+-339933?logo=node.js&logoColor=white)
 ![CLI](https://img.shields.io/badge/interface-CLI-111111)
 ![WASM](https://img.shields.io/badge/runtime-WASM-654FF0?logo=webassembly&logoColor=white)
 ![Local only](https://img.shields.io/badge/privacy-local_only-2F855A)
