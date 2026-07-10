@@ -1,11 +1,14 @@
 {
   "name": "pre-print-check",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local SVG preflight and repair for print, cutters, engraving, large-format, and web workflows.",
   "type": "module",
   "main": "./npm/index.cjs",
   "module": "./npm/index.js",
   "types": "./npm/index.d.ts",
+  "bin": {
+    "pre-print-check": "./npm/cli.mjs"
+  },
   "exports": {
     ".": {
       "types": "./npm/index.d.ts",
@@ -41,6 +44,7 @@
     "npm/index.cjs",
     "npm/index.d.ts",
     "npm/index.js",
+    "npm/cli.mjs",
     "npm/runtime.js",
     "README.md"
   ],

@@ -61,6 +61,7 @@ Or use the WASM package from JavaScript:
 
 ```sh
 npm install pre-print-check
+npx pre-print-check --target vinyl art.svg
 ```
 
 ```js
@@ -121,13 +122,16 @@ The package exposes the same core engine used by the CLI and WASM package:
 - `svgcheck.Fix` for conservative SVG repairs.
 - `svgcheck.ParseTarget`, target constants, issue severities, ranks, and fix categories.
 
-To publish a new Go package version, tag the module with a semantic version and push the tag:
+To publish a new Go package version, bump the NPM version, tag the module with a semantic version, and push the tag:
 
 ```sh
-git tag v0.2.0
-git push origin v0.2.0
-GOPROXY=proxy.golang.org go list -m github.com/justsml/pre-print-check@v0.2.0
+npm version minor
+git tag v0.3.0
+git push origin v0.3.0
+GOPROXY=proxy.golang.org go list -m github.com/justsml/pre-print-check@v0.3.0
 ```
+
+Tagged `v*` releases are published automatically by GitHub Actions on the `main` branch path.
 
 ## Quick Start
 
