@@ -9,6 +9,13 @@ const state = {
   urls: new Set(),
 };
 
+const SHARE_QUERY_KEY = "state";
+const SHARE_COMPRESSION_THRESHOLD_BYTES = 2200;
+const SHARE_COMPRESSED_PREFIX = "z:";
+const SHARE_DECODED_VERSION = 1;
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+
 const el = {
   runtimeStatus: document.querySelector("#runtimeStatus"),
   summaryLine: document.querySelector("#summaryLine"),
@@ -23,6 +30,7 @@ const el = {
   downloadSvgButton: document.querySelector("#downloadSvgButton"),
   downloadOverlayButton: document.querySelector("#downloadOverlayButton"),
   applyReportFixesButton: document.querySelector("#applyReportFixesButton"),
+  shareButton: document.querySelector("#shareButton"),
   clearLogButton: document.querySelector("#clearLogButton"),
   fileName: document.querySelector("#fileName"),
   svgPreview: document.querySelector("#svgPreview"),
@@ -61,6 +69,7 @@ function wireEvents() {
   });
   el.unsafeToggle.addEventListener("change", renderIssues);
   el.analyzeButton.addEventListener("click", analyzeCurrent);
+  el.shareButton.addEventListener("click", sharePlayground);
   el.fixSafeButton.addEventListener("click", () => applyFixes(["metadata", "bleed"], false));
   el.applyReportFixesButton.addEventListener("click", applyReportFixes);
   el.downloadSvgButton.addEventListener("click", () => downloadText(state.currentSVG, fileStem() + ".svg", "image/svg+xml"));
@@ -144,6 +153,18 @@ async function bootWasm() {
 
 async function loadRoutePreset() {
   const params = new URLSearchParams(window.location.search);
+  const encodedState = params.get(SHARE_QUERY_KEY);
+  if (encodedState) {
+    try {
+      const snapshot = await decodePlaygroundSnapshot(encodedState);
+      if (await applyPlaygroundSnapshot(snapshot)) {
+        return;
+      }
+    } catch (error) {
+      addLog(`Could not read share state: ${error.message || error}`, "error");
+    }
+  }
+
   const target = params.get("target");
   const sample = params.get("sample");
   const view = params.get("view");
@@ -479,9 +500,190 @@ function setControlsEnabled(enabled) {
     el.downloadSvgButton,
     el.downloadOverlayButton,
     el.applyReportFixesButton,
+    el.shareButton,
   ].forEach((node) => {
     node.disabled = !enabled;
   });
+}
+
+async function sharePlayground() {
+  if (!state.currentSVG.trim()) {
+    addLog("Load an SVG before creating a share link", "warn");
+    return;
+  }
+  try {
+    const snapshot = {
+      v: SHARE_DECODED_VERSION,
+      svg: state.currentSVG,
+      fileName: state.fileName || "untitled.svg",
+      target: currentTarget(),
+      customTarget: el.customTarget.value.trim(),
+      unsafe: el.unsafeToggle.checked,
+      view: state.view,
+      sample: el.sampleSelect.value || "",
+      report: state.report || null,
+      overlay: state.overlaySVG || "",
+      analyzed: Boolean(state.report),
+    };
+
+    const encoded = await encodePlaygroundSnapshot(snapshot);
+    const shareUrl = new URL(window.location.href);
+    shareUrl.search = "";
+    shareUrl.searchParams.set(SHARE_QUERY_KEY, encoded);
+    await copyTextToClipboard(shareUrl.toString());
+    addLog("Share link copied to clipboard");
+  } catch (error) {
+    addLog(`Could not create share link: ${error.message || error}`, "error");
+  }
+}
+
+async function copyTextToClipboard(text) {
+  if (!text) return;
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+}
+
+async function encodePlaygroundSnapshot(payload) {
+  const rawJson = JSON.stringify(payload);
+  const rawBytes = textEncoder.encode(rawJson);
+  const plainEncoded = toBase64Url(rawBytes);
+
+  if (rawBytes.length < SHARE_COMPRESSION_THRESHOLD_BYTES) {
+    return plainEncoded;
+  }
+
+  if (!window.CompressionStream) {
+    return plainEncoded;
+  }
+
+  const compressedBytes = await gzipBytes(rawBytes);
+  const compressedEncoded = toBase64Url(compressedBytes);
+  if (compressedEncoded.length >= plainEncoded.length) {
+    return plainEncoded;
+  }
+  return `${SHARE_COMPRESSED_PREFIX}${compressedEncoded}`;
+}
+
+async function decodePlaygroundSnapshot(encoded) {
+  if (!encoded) {
+    throw new Error("missing share payload");
+  }
+
+  const isCompressed = encoded.startsWith(SHARE_COMPRESSED_PREFIX);
+  const payload = isCompressed ? encoded.slice(SHARE_COMPRESSED_PREFIX.length) : encoded;
+  const bytes = fromBase64Url(payload);
+  const decodedBytes = isCompressed
+    ? await decompressBytes(bytes)
+    : bytes;
+  const json = textDecoder.decode(decodedBytes);
+  const snapshot = JSON.parse(json);
+  if (!snapshot || snapshot.v !== SHARE_DECODED_VERSION || typeof snapshot.svg !== "string") {
+    throw new Error("share state is missing expected fields");
+  }
+  return snapshot;
+}
+
+async function applyPlaygroundSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot.svg !== "string") {
+    return false;
+  }
+
+  const target = snapshot.target || "paper";
+  const targetOption = Array.from(el.targetSelect.options).find((option) => option.value === target);
+  if (targetOption) {
+    el.targetSelect.value = target;
+    el.customTargetWrap.classList.add("hidden");
+  } else {
+    el.targetSelect.value = "custom";
+    el.customTarget.value = target;
+    el.customTargetWrap.classList.remove("hidden");
+  }
+
+  if (snapshot.customTarget) {
+    el.customTarget.value = snapshot.customTarget;
+  } else if (target !== "custom") {
+    el.customTarget.value = "";
+  }
+
+  if (typeof snapshot.unsafe === "boolean") {
+    el.unsafeToggle.checked = snapshot.unsafe;
+  }
+
+  if (snapshot.sample) {
+    const sampleOption = Array.from(el.sampleSelect.options).find((option) => option.value === snapshot.sample);
+    el.sampleSelect.value = sampleOption ? snapshot.sample : "";
+  } else {
+    el.sampleSelect.value = "";
+  }
+
+  if (snapshot.view && document.querySelector(`[data-view="${CSS.escape(snapshot.view)}"]`)) {
+    state.view = snapshot.view;
+  } else {
+    state.view = "original";
+  }
+
+  setSVG(snapshot.svg, snapshot.fileName || "untitled.svg");
+  state.originalSVG = snapshot.svg;
+  state.overlaySVG = snapshot.overlay || "";
+  state.report = snapshot.report || null;
+  if (snapshot.analyzed) {
+    render();
+    return true;
+  }
+
+  await analyzeCurrent();
+  return true;
+}
+
+async function gzipBytes(bytes) {
+  const stream = new CompressionStream("gzip");
+  const writer = stream.writable.getWriter();
+  await writer.write(bytes);
+  await writer.close();
+  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+}
+
+async function decompressBytes(bytes) {
+  if (!window.DecompressionStream) {
+    throw new Error("Decompression not supported in this browser");
+  }
+  const stream = new DecompressionStream("gzip");
+  const writer = stream.writable.getWriter();
+  await writer.write(bytes);
+  await writer.close();
+  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+}
+
+function toBase64Url(bytes) {
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fromBase64Url(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 
 function setStatus(text, state) {
