@@ -42,6 +42,10 @@ type Report struct {
 	Issues []Issue
 }
 
+type inspectionDetails struct {
+	endpoints []geometryEndpoint
+}
+
 type SVGMeta struct {
 	FoundSVG               bool
 	Width                  string
@@ -117,22 +121,26 @@ func CheckFile(path string, rawTarget string) (Report, error) {
 }
 
 func Check(input []byte, rawTarget string) (Report, error) {
+	report, _, err := checkWithDetails(input, rawTarget)
+	return report, err
+}
+
+func checkWithDetails(input []byte, rawTarget string) (Report, inspectionDetails, error) {
 	target, err := ParseTarget(rawTarget)
 	if err != nil {
-		return Report{}, err
+		return Report{}, inspectionDetails{}, err
 	}
 
-	meta, err := inspect(input)
+	meta, details, err := inspectForTarget(input, target)
 	if err != nil {
-		return Report{}, err
+		return Report{}, inspectionDetails{}, err
 	}
-	enrichProductionDetails(input, target, &meta)
 
 	report := Report{Target: target, Meta: meta}
 	profile := issueProfileForTarget(target)
 	report.addCoreIssues(profile)
 	report.addTargetIssues()
-	return report, nil
+	return report, details, nil
 }
 
 func (r Report) HasErrors() bool {
@@ -405,11 +413,28 @@ func (r *Report) addRankedIssue(severity Severity, code, message string, rank Fi
 }
 
 func inspect(input []byte) (SVGMeta, error) {
+	meta, _, err := inspectWithOptions(input, Target{}, false)
+	return meta, err
+}
+
+func inspectForTarget(input []byte, target Target) (SVGMeta, inspectionDetails, error) {
+	return inspectWithOptions(input, target, true)
+}
+
+func inspectWithOptions(input []byte, target Target, productionDetails bool) (SVGMeta, inspectionDetails, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(input))
 	meta := SVGMeta{}
+	details := inspectionDetails{}
+	colorSet := map[string]struct{}{}
 	endpoints := []geometryEndpoint{}
 	geometrySource := 0
 	styleStack := []geometryStyle{defaultGeometryStyle()}
+	var shapes []roughShape
+	var polygons []roughShape
+	var texts []roughText
+	thinCounts := map[string]int{}
+	currentText := (*textCapture)(nil)
+	mmPerUnit := float64(0)
 
 	for {
 		token, err := decoder.Token()
@@ -417,13 +442,14 @@ func inspect(input []byte) (SVGMeta, error) {
 			break
 		}
 		if err != nil {
-			return meta, fmt.Errorf("invalid SVG XML: %w", err)
+			return meta, details, fmt.Errorf("invalid SVG XML: %w", err)
 		}
 
 		switch tok := token.(type) {
 		case xml.StartElement:
 			name := strings.ToLower(tok.Name.Local)
-			currentStyle := inheritedGeometryStyle(styleStack[len(styleStack)-1], tok.Attr)
+			attrByName := attrsByName(tok.Attr)
+			currentStyle := inheritedGeometryStyle(styleStack[len(styleStack)-1], attrByName)
 			styleStack = append(styleStack, currentStyle)
 			if name == "svg" && !meta.FoundSVG {
 				meta.FoundSVG = true
@@ -443,6 +469,7 @@ func inspect(input []byte) (SVGMeta, error) {
 						}
 					}
 				}
+				mmPerUnit = physicalMMPerSVGUnit(meta, target)
 			}
 
 			switch name {
@@ -464,7 +491,7 @@ func inspect(input []byte) (SVGMeta, error) {
 			case "clippath":
 				meta.ClipPaths++
 			}
-			endpoints = append(endpoints, endpointsFromElement(name, tok.Attr, currentStyle, &geometrySource)...)
+			endpoints = append(endpoints, endpointsFromElement(name, attrByName, currentStyle, &geometrySource)...)
 
 			for _, attr := range tok.Attr {
 				attrName := strings.ToLower(attr.Name.Local)
@@ -481,10 +508,58 @@ func inspect(input []byte) (SVGMeta, error) {
 					meta.ExternalRefs++
 				}
 				inspectAttrForPrintSignals(attrName, attrValue, &meta)
+				collectColorTokens(attrValue, colorSet)
+			}
+
+			if productionDetails {
+				if isOverlayGeometryElement(name) && currentStyle.hasVisibleStroke() && strokeWidthLooksProductionThin(currentStyle.strokeWidth) {
+					thinCounts[strokeWidthLabel(attrByName, currentStyle)]++
+				}
+
+				if b, ok := roughBBox(name, attrByName); ok {
+					shapes = append(shapes, roughShape{kind: name, box: b})
+					if name == "polygon" {
+						polygons = append(polygons, roughShape{kind: name, box: b})
+					}
+					if mmPerUnit > 0 {
+						maxMM := math.Max(b.width(), b.height()) * mmPerUnit
+						if maxMM > 0 && maxMM < 1 {
+							meta.SmallShapesSub1MM++
+						}
+						if maxMM > 0 && maxMM < 2 {
+							meta.SmallShapesSub2MM++
+						}
+					}
+				}
+
+				if name == "text" {
+					currentText = newTextCapture(attrByName, currentStyle)
+				}
+				if name == "fedropshadow" && largeShadowElement(attrByName) {
+					meta.LargeShadows++
+				}
+				if backgroundTransparencyElement(name, attrByName, meta) {
+					meta.BackgroundTransparency++
+				}
 			}
 		case xml.CharData:
 			meta.ExternalRefs += countExternalCSSResourceRefs(string(tok))
+			if len(tok) <= maxColorCharDataScanBytes {
+				collectColorTokens(string(tok), colorSet)
+			}
+			if productionDetails && currentText != nil {
+				currentText.text.WriteString(string(tok))
+			}
 		case xml.EndElement:
+			if productionDetails {
+				name := strings.ToLower(tok.Name.Local)
+				if name == "text" && currentText != nil {
+					if text, ok := currentText.toRoughText(); ok {
+						texts = append(texts, text)
+					}
+					currentText = nil
+				}
+			}
 			if len(styleStack) > 1 {
 				styleStack = styleStack[:len(styleStack)-1]
 			}
@@ -492,11 +567,24 @@ func inspect(input []byte) (SVGMeta, error) {
 	}
 
 	if !meta.FoundSVG {
-		return meta, fmt.Errorf("no root <svg> element found")
+		return meta, details, fmt.Errorf("no root <svg> element found")
 	}
-	meta.UniqueColors = len(colorSetFrom(input))
+	meta.UniqueColors = len(colorSet)
 	meta.NearDisconnected = countNearDisconnectedEndpoints(endpoints)
-	return meta, nil
+	details.endpoints = endpoints
+	if productionDetails {
+		meta.ThinStrokeSummaries = strokeSummaries(thinCounts)
+		if len(meta.ThinStrokeSummaries) > 0 {
+			meta.ThinStrokes = 0
+			for _, summary := range meta.ThinStrokeSummaries {
+				meta.ThinStrokes += summary.Count
+			}
+		}
+		meta.TextShapeOverlaps = textPolygonOverlaps(texts, polygons)
+		meta.SubtleEffects = subtleEffectCount(meta)
+		meta.MissingBleedShapes, meta.SafeAreaRiskShapes = bleedAndSafeAreaRisks(meta, target, shapes, texts)
+	}
+	return meta, details, nil
 }
 
 type roughShape struct {
@@ -535,12 +623,12 @@ func enrichProductionDetails(input []byte, target Target, meta *SVGMeta) {
 		switch tok := token.(type) {
 		case xml.StartElement:
 			name := strings.ToLower(tok.Name.Local)
-			style := inheritedGeometryStyle(styleStack[len(styleStack)-1], tok.Attr)
-			styleStack = append(styleStack, style)
 			attr := attrsByName(tok.Attr)
+			style := inheritedGeometryStyle(styleStack[len(styleStack)-1], attr)
+			styleStack = append(styleStack, style)
 
 			if isOverlayGeometryElement(name) && style.hasVisibleStroke() && strokeWidthLooksProductionThin(style.strokeWidth) {
-				thinCounts[strokeWidthLabel(tok.Attr, style)]++
+				thinCounts[strokeWidthLabel(attr, style)]++
 			}
 
 			if b, ok := roughBBox(name, attr); ok {
@@ -678,31 +766,25 @@ func roughBBox(name string, attr map[string]string) (box, bool) {
 }
 
 func pointsFromNumberList(value string) []geometryEndpoint {
-	values := pathNumberPattern.FindAllString(value, -1)
+	values := pathNumbers(value)
 	if len(values) < 2 {
 		return nil
 	}
 	points := make([]geometryEndpoint, 0, len(values)/2)
 	for i := 0; i+1 < len(values); i += 2 {
-		x, y, ok := parsePathPair(values[i], values[i+1])
-		if ok {
-			points = append(points, geometryEndpoint{x: x, y: y})
-		}
+		points = append(points, geometryEndpoint{x: values[i], y: values[i+1]})
 	}
 	return points
 }
 
 func roughPathPoints(value string) []geometryEndpoint {
-	values := pathNumberPattern.FindAllString(value, -1)
+	values := pathNumbers(value)
 	if len(values) < 2 {
 		return nil
 	}
 	points := make([]geometryEndpoint, 0, len(values)/2)
 	for i := 0; i+1 < len(values); i += 2 {
-		x, y, ok := parsePathPair(values[i], values[i+1])
-		if ok {
-			points = append(points, geometryEndpoint{x: x, y: y})
-		}
+		points = append(points, geometryEndpoint{x: values[i], y: values[i+1]})
 	}
 	return points
 }
@@ -854,15 +936,11 @@ func physicalMMPerSVGUnit(meta SVGMeta, target Target) float64 {
 }
 
 func parseSVGLengthInches(value string) float64 {
-	matches := lengthPattern.FindStringSubmatch(value)
-	if matches == nil {
+	n, unit, ok := parseSVGLength(value)
+	if !ok {
 		return 0
 	}
-	n, err := strconv.ParseFloat(matches[1], 64)
-	if err != nil {
-		return 0
-	}
-	switch strings.ToLower(matches[2]) {
+	switch strings.ToLower(unit) {
 	case "in":
 		return n
 	case "ft":
@@ -891,8 +969,7 @@ func strokeWidthLooksProductionThin(width float64) bool {
 	return width > 0 && width <= 1.5
 }
 
-func strokeWidthLabel(attrs []xml.Attr, style geometryStyle) string {
-	attr := attrsByName(attrs)
+func strokeWidthLabel(attr map[string]string, style geometryStyle) string {
 	if value := attr["stroke-width"]; value != "" {
 		return value
 	}
@@ -1004,11 +1081,10 @@ func largeShadowElement(attr map[string]string) bool {
 }
 
 func firstFloat(value string) float64 {
-	values := pathNumberPattern.FindAllString(value, -1)
-	if len(values) == 0 {
+	n, ok := firstPathNumber(value)
+	if !ok {
 		return 0
 	}
-	n, _ := strconv.ParseFloat(values[0], 64)
 	return n
 }
 
@@ -1056,12 +1132,11 @@ func rgbaAlphaLessThanOne(value string) bool {
 	if !strings.HasPrefix(lower, "rgba(") {
 		return false
 	}
-	values := pathNumberPattern.FindAllString(lower, -1)
+	values := pathNumbers(lower)
 	if len(values) < 4 {
 		return false
 	}
-	alpha, err := strconv.ParseFloat(values[3], 64)
-	return err == nil && alpha < 1
+	return values[3] < 1
 }
 
 func truncateText(value string, maxRunes int) string {
@@ -1092,35 +1167,81 @@ func smallestFloat(values []float64) float64 {
 	return smallest
 }
 
-var lengthPattern = regexp.MustCompile(`^\s*([0-9]*\.?[0-9]+)\s*([a-zA-Z%]*)\s*$`)
-
 func parseSVGLengthPixels(value string) float64 {
-	matches := lengthPattern.FindStringSubmatch(value)
-	if matches == nil {
-		return 0
+	pixels, _ := parseSVGLengthPixelsValue(value)
+	return pixels
+}
+
+func parseSVGLengthPixelsValue(value string) (float64, bool) {
+	n, unit, ok := parseSVGLength(value)
+	if !ok {
+		return 0, false
 	}
-	n, err := strconv.ParseFloat(matches[1], 64)
-	if err != nil {
-		return 0
-	}
-	switch strings.ToLower(matches[2]) {
+	switch strings.ToLower(unit) {
 	case "", "px":
-		return n
+		return n, true
 	case "in":
-		return n * 96
+		return n * 96, true
 	case "ft":
-		return n * 12 * 96
+		return n * 12 * 96, true
 	case "cm":
-		return n * 96 / 2.54
+		return n * 96 / 2.54, true
 	case "mm":
-		return n * 96 / 25.4
+		return n * 96 / 25.4, true
 	case "pt":
-		return n * 96 / 72
+		return n * 96 / 72, true
 	case "pc":
-		return n * 16
+		return n * 16, true
 	default:
-		return 0
+		return 0, false
 	}
+}
+
+func parseSVGLength(value string) (float64, string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, "", false
+	}
+
+	i := 0
+	digitsBeforeDot := 0
+	for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+		i++
+		digitsBeforeDot++
+	}
+
+	digitsAfterDot := 0
+	if i < len(value) && value[i] == '.' {
+		i++
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			i++
+			digitsAfterDot++
+		}
+	}
+	if digitsBeforeDot == 0 && digitsAfterDot == 0 {
+		return 0, "", false
+	}
+	if digitsAfterDot == 0 && i > 0 && value[i-1] == '.' {
+		return 0, "", false
+	}
+
+	number := value[:i]
+	for i < len(value) && (value[i] == ' ' || value[i] == '\t' || value[i] == '\n' || value[i] == '\r') {
+		i++
+	}
+	unitStart := i
+	for i < len(value) && ((value[i] >= 'a' && value[i] <= 'z') || (value[i] >= 'A' && value[i] <= 'Z') || value[i] == '%') {
+		i++
+	}
+	if i != len(value) {
+		return 0, "", false
+	}
+
+	n, err := strconv.ParseFloat(number, 64)
+	if err != nil {
+		return 0, "", false
+	}
+	return n, value[unitStart:i], true
 }
 
 func referencesExternalResource(value string) bool {
@@ -1199,15 +1320,10 @@ func strokeWidthLooksThin(value string) bool {
 }
 
 func inspectStyle(style string, meta *SVGMeta) {
-	for _, declaration := range strings.Split(style, ";") {
-		parts := strings.SplitN(declaration, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		name := strings.ToLower(strings.TrimSpace(parts[0]))
-		value := strings.TrimSpace(parts[1])
+	visitStyleDeclarations(style, func(rawName, value string) {
+		name := strings.ToLower(rawName)
 		inspectAttrForPrintSignals(name, value, meta)
-	}
+	})
 }
 
 func elementLooksLikeShadow(element xml.StartElement) bool {
@@ -1238,12 +1354,60 @@ func isLikelyColorValue(value string) bool {
 
 var colorTokenPattern = regexp.MustCompile(`(?i)(#[0-9a-f]{3,8}\b|rgba?\([^)]+\)|hsla?\([^)]+\)|device-cmyk\([^)]+\)|cmyk\([^)]+\)|icc-color\([^)]+\))`)
 
-func colorSetFrom(input []byte) map[string]struct{} {
-	set := map[string]struct{}{}
-	for _, match := range colorTokenPattern.FindAll(input, -1) {
-		set[strings.ToLower(string(match))] = struct{}{}
+const maxColorCharDataScanBytes = 64 * 1024
+
+func collectColorTokens(value string, set map[string]struct{}) {
+	if !mayContainColorToken(value) {
+		return
 	}
-	return set
+	for _, match := range colorTokenPattern.FindAllString(value, -1) {
+		set[strings.ToLower(match)] = struct{}{}
+	}
+}
+
+func mayContainColorToken(value string) bool {
+	for i := 0; i < len(value); i++ {
+		switch asciiLower(value[i]) {
+		case '#':
+			return true
+		case 'r':
+			if hasASCIIInsensitivePrefix(value[i:], "rgb") {
+				return true
+			}
+		case 'h':
+			if hasASCIIInsensitivePrefix(value[i:], "hsl") {
+				return true
+			}
+		case 'c':
+			if hasASCIIInsensitivePrefix(value[i:], "cmyk") {
+				return true
+			}
+		case 'i':
+			if hasASCIIInsensitivePrefix(value[i:], "icc-color") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasASCIIInsensitivePrefix(value, prefix string) bool {
+	if len(value) < len(prefix) {
+		return false
+	}
+	for i := 0; i < len(prefix); i++ {
+		if asciiLower(value[i]) != prefix[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiLower(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + ('a' - 'A')
+	}
+	return b
 }
 
 func isNamedSVGColor(value string) bool {
@@ -1299,12 +1463,11 @@ type geometryStyle struct {
 	strokeWidth float64
 }
 
-func endpointsFromElement(name string, attrs []xml.Attr, style geometryStyle, sourceCounter *int) []geometryEndpoint {
+func endpointsFromElement(name string, attr map[string]string, style geometryStyle, sourceCounter *int) []geometryEndpoint {
 	if !style.hasVisibleStroke() {
 		return nil
 	}
 
-	attr := attrsByName(attrs)
 	switch name {
 	case "line":
 		x1, ok1 := parseCoordinate(attr["x1"])
@@ -1339,22 +1502,16 @@ func attrsByName(attrs []xml.Attr) map[string]string {
 }
 
 func parseCoordinate(value string) (float64, bool) {
-	if lengthPattern.FindStringSubmatch(value) == nil {
-		return 0, false
-	}
-	return parseSVGLengthPixels(value), true
+	return parseSVGLengthPixelsValue(value)
 }
 
 func endpointsFromPointList(points string, closed bool, style geometryStyle, sourceCounter *int) []geometryEndpoint {
-	values := pathNumberPattern.FindAllString(points, -1)
+	values := pathNumbers(points)
 	if len(values) < 4 || len(values)%2 != 0 {
 		return nil
 	}
-	first, okFirst := pointFromNumberStrings(values[0], values[1])
-	last, okLast := pointFromNumberStrings(values[len(values)-2], values[len(values)-1])
-	if !okFirst || !okLast {
-		return nil
-	}
+	first := geometryEndpoint{x: values[0], y: values[1]}
+	last := geometryEndpoint{x: values[len(values)-2], y: values[len(values)-1]}
 	if closed || pointsNearlyEqual(first, last, connectedEndpointTolerance) {
 		return nil
 	}
@@ -1366,8 +1523,84 @@ func endpointsFromPointList(points string, closed bool, style geometryStyle, sou
 	return []geometryEndpoint{first, last}
 }
 
-var pathNumberPattern = regexp.MustCompile(`[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?`)
-var pathTokenPattern = regexp.MustCompile(`[AaCcHhLlMmQqSsTtVvZz]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?`)
+func pathNumbers(value string) []float64 {
+	var numbers []float64
+	for i := 0; i < len(value); {
+		start, end, ok := pathNumberBounds(value, i)
+		if !ok {
+			i++
+			continue
+		}
+		n, err := strconv.ParseFloat(value[start:end], 64)
+		if err == nil {
+			numbers = append(numbers, n)
+		}
+		i = end
+	}
+	return numbers
+}
+
+func firstPathNumber(value string) (float64, bool) {
+	for i := 0; i < len(value); {
+		start, end, ok := pathNumberBounds(value, i)
+		if !ok {
+			i++
+			continue
+		}
+		n, err := strconv.ParseFloat(value[start:end], 64)
+		return n, err == nil
+	}
+	return 0, false
+}
+
+func pathNumberBounds(value string, startAt int) (start, end int, ok bool) {
+	i := startAt
+	if i >= len(value) {
+		return 0, 0, false
+	}
+	if value[i] == '+' || value[i] == '-' {
+		i++
+		if i >= len(value) {
+			return 0, 0, false
+		}
+	}
+
+	digitsBeforeDot := 0
+	for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+		i++
+		digitsBeforeDot++
+	}
+
+	digitsAfterDot := 0
+	if i < len(value) && value[i] == '.' {
+		i++
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			i++
+			digitsAfterDot++
+		}
+	}
+	if digitsBeforeDot == 0 && digitsAfterDot == 0 {
+		return 0, 0, false
+	}
+
+	if i < len(value) && (value[i] == 'e' || value[i] == 'E') {
+		expStart := i
+		i++
+		if i < len(value) && (value[i] == '+' || value[i] == '-') {
+			i++
+		}
+		expDigits := 0
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			i++
+			expDigits++
+		}
+		if expDigits == 0 {
+			i = expStart
+		}
+	}
+
+	return startAt, i, true
+}
 
 func endpointsFromPathData(data string, style geometryStyle, sourceCounter *int) []geometryEndpoint {
 	tokens := pathTokenPattern.FindAllString(data, -1)
@@ -1524,11 +1757,7 @@ func endpointsFromPathData(data string, style geometryStyle, sourceCounter *int)
 	return endpoints
 }
 
-func pointFromNumberStrings(xValue, yValue string) (geometryEndpoint, bool) {
-	x, okX := parsePathNumber(xValue)
-	y, okY := parsePathNumber(yValue)
-	return geometryEndpoint{x: x, y: y}, okX && okY
-}
+var pathTokenPattern = regexp.MustCompile(`[AaCcHhLlMmQqSsTtVvZz]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?`)
 
 func parsePathPair(xValue, yValue string) (float64, float64, bool) {
 	x, okX := parsePathNumber(xValue)
@@ -1638,9 +1867,8 @@ func (s geometryStyle) hasVisibleStroke() bool {
 	return s.stroke != "" && strings.ToLower(strings.TrimSpace(s.stroke)) != "none" && s.strokeWidth > 0
 }
 
-func inheritedGeometryStyle(parent geometryStyle, attrs []xml.Attr) geometryStyle {
+func inheritedGeometryStyle(parent geometryStyle, attr map[string]string) geometryStyle {
 	style := parent
-	attr := attrsByName(attrs)
 	if value := styleValue(attr["style"], "stroke"); value != "" {
 		style.stroke = value
 	}
@@ -1657,8 +1885,9 @@ func inheritedGeometryStyle(parent geometryStyle, attrs []xml.Attr) geometryStyl
 }
 
 func parseStrokeWidthOrDefault(value string, fallback float64) float64 {
-	if lengthPattern.FindStringSubmatch(value) == nil {
+	pixels, ok := parseSVGLengthPixelsValue(value)
+	if !ok {
 		return fallback
 	}
-	return parseSVGLengthPixels(value)
+	return pixels
 }

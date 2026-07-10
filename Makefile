@@ -15,7 +15,9 @@ go-package-check:
 
 wasm:
 	mkdir -p dist
-	GOOS=js GOARCH=wasm go build -o dist/pre-print-check.wasm ./cmd/preprintcheck-wasm
+	GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o dist/pre-print-check.wasm ./cmd/preprintcheck-wasm
+	GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o dist/pre-print-check-check.wasm ./cmd/preprintcheck-wasm-check
+	GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o dist/pre-print-check-fix.wasm ./cmd/preprintcheck-wasm-fix
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" dist/wasm_exec.js
 
 npm-test:

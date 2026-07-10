@@ -65,8 +65,6 @@ export interface FixResult {
   svg: string;
   changes: string[];
   skipped: string[];
-  report: PrePrintCheckReport;
-  overlay: string;
 }
 
 export interface PrePrintCheckAPI {

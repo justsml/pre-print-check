@@ -12,15 +12,36 @@
       "import": "./npm/index.js",
       "require": "./npm/index.cjs"
     },
+    "./check": {
+      "types": "./npm/check.d.ts",
+      "import": "./npm/check.js",
+      "require": "./npm/check.cjs"
+    },
+    "./fix": {
+      "types": "./npm/fix.d.ts",
+      "import": "./npm/fix.js",
+      "require": "./npm/fix.cjs"
+    },
     "./pre-print-check.wasm": "./dist/pre-print-check.wasm",
+    "./pre-print-check-check.wasm": "./dist/pre-print-check-check.wasm",
+    "./pre-print-check-fix.wasm": "./dist/pre-print-check-fix.wasm",
     "./wasm_exec.js": "./dist/wasm_exec.js"
   },
   "files": [
     "dist/pre-print-check.wasm",
+    "dist/pre-print-check-check.wasm",
+    "dist/pre-print-check-fix.wasm",
     "dist/wasm_exec.js",
+    "npm/check.cjs",
+    "npm/check.d.ts",
+    "npm/check.js",
+    "npm/fix.cjs",
+    "npm/fix.d.ts",
+    "npm/fix.js",
     "npm/index.cjs",
     "npm/index.d.ts",
     "npm/index.js",
+    "npm/runtime.js",
     "README.md"
   ],
   "scripts": {

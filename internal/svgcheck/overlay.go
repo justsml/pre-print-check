@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -28,15 +27,21 @@ type thinShape struct {
 }
 
 func GenerateOverlay(input []byte, opts OverlayOptions) ([]byte, error) {
-	report, err := Check(input, opts.Target)
+	report, details, err := checkWithDetails(input, opts.Target)
 	if err != nil {
 		return nil, err
 	}
-	data, err := inspectOverlayData(input, opts.Target)
-	if err != nil {
-		return nil, err
+	data := overlayData{Meta: report.Meta, Report: report}
+	if reportHasAnyIssue(report, "near-disconnected-lines") {
+		data.Endpoints = details.endpoints
 	}
-	data.Report = report
+	if reportHasAnyIssue(report, "thin-stroke") {
+		overlayDetails, err := inspectOverlayData(input, report.Meta)
+		if err != nil {
+			return nil, err
+		}
+		data.ThinShapes = overlayDetails.ThinShapes
+	}
 
 	var out strings.Builder
 	viewBox := overlayViewBox(data.Meta)
@@ -73,19 +78,9 @@ func GenerateOverlay(input []byte, opts OverlayOptions) ([]byte, error) {
 	return []byte(out.String()), nil
 }
 
-func inspectOverlayData(input []byte, rawTarget string) (overlayData, error) {
-	meta, err := inspect(input)
-	if err != nil {
-		return overlayData{}, err
-	}
-	target, err := ParseTarget(rawTarget)
-	if err != nil {
-		return overlayData{}, err
-	}
-	profile := issueProfileForTarget(target)
+func inspectOverlayData(input []byte, meta SVGMeta) (overlayData, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(input))
 	data := overlayData{Meta: meta}
-	geometrySource := 0
 	styleStack := []geometryStyle{defaultGeometryStyle()}
 
 	for {
@@ -98,15 +93,13 @@ func inspectOverlayData(input []byte, rawTarget string) (overlayData, error) {
 		}
 		switch tok := token.(type) {
 		case xml.StartElement:
-			currentStyle := inheritedGeometryStyle(styleStack[len(styleStack)-1], tok.Attr)
+			attr := attrsByName(tok.Attr)
+			currentStyle := inheritedGeometryStyle(styleStack[len(styleStack)-1], attr)
 			styleStack = append(styleStack, currentStyle)
 			name := strings.ToLower(tok.Name.Local)
 			if isOverlayGeometryElement(name) {
-				if profile.ReviewDisconnectedJoins {
-					data.Endpoints = append(data.Endpoints, endpointsFromElement(name, tok.Attr, currentStyle, &geometrySource)...)
-				}
-				if profile.ReviewThinStrokes && elementHasThinStroke(tok.Attr) {
-					data.ThinShapes = append(data.ThinShapes, thinShape{name: name, attrs: attrsByName(tok.Attr)})
+				if elementHasThinStroke(tok.Attr) {
+					data.ThinShapes = append(data.ThinShapes, thinShape{name: name, attrs: attr})
 				}
 			}
 		case xml.EndElement:
@@ -247,16 +240,38 @@ func elementHasThinStroke(attrs []xml.Attr) bool {
 }
 
 func styleValue(style, key string) string {
-	for _, declaration := range strings.Split(style, ";") {
-		parts := strings.SplitN(declaration, ":", 2)
-		if len(parts) != 2 {
-			continue
+	value := ""
+	visitStyleDeclarations(style, func(name, declarationValue string) {
+		if value == "" && strings.EqualFold(name, key) {
+			value = declarationValue
 		}
-		if strings.EqualFold(strings.TrimSpace(parts[0]), key) {
-			return strings.TrimSpace(parts[1])
+	})
+	return value
+}
+
+func visitStyleDeclarations(style string, visit func(name, value string)) {
+	for start := 0; start < len(style); {
+		end := strings.IndexByte(style[start:], ';')
+		if end < 0 {
+			end = len(style)
+		} else {
+			end += start
 		}
+
+		declaration := style[start:end]
+		if colon := strings.IndexByte(declaration, ':'); colon >= 0 {
+			name := strings.TrimSpace(declaration[:colon])
+			value := strings.TrimSpace(declaration[colon+1:])
+			if name != "" {
+				visit(name, value)
+			}
+		}
+
+		if end == len(style) {
+			break
+		}
+		start = end + 1
 	}
-	return ""
 }
 
 func overlayViewBox(meta SVGMeta) string {
@@ -312,8 +327,13 @@ func transformAttr(attrs map[string]string) string {
 
 func stripXMLDeclaration(input []byte) string {
 	text := strings.TrimSpace(string(input))
-	xmlDeclarationPattern := regexp.MustCompile(`(?is)^<\?xml[^>]*>\s*`)
-	return xmlDeclarationPattern.ReplaceAllString(text, "")
+	if len(text) < len("<?xml") || !strings.EqualFold(text[:len("<?xml")], "<?xml") {
+		return text
+	}
+	if end := strings.Index(text, "?>"); end >= 0 {
+		return strings.TrimSpace(text[end+len("?>"):])
+	}
+	return text
 }
 
 func severityColor(severity Severity) string {

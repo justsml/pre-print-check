@@ -238,7 +238,7 @@ By default, `fix` only performs conservative changes:
 
 ## JavaScript API
 
-The npm package exposes async helpers and a cached runtime loader:
+The default npm entrypoint exposes the full local WASM runtime:
 
 ```js
 import { loadPrePrintCheck, check, overlay, fix, fixCategories } from "pre-print-check";
@@ -254,6 +254,15 @@ const categories = await fixCategories();
 const prePrint = await loadPrePrintCheck();
 const sameReport = prePrint.check(svg, { target: "paper" });
 ```
+
+Limited-scope entrypoints are available when an app only needs one surface:
+
+```js
+import { check } from "pre-print-check/check";
+import { fix, fixCategories } from "pre-print-check/fix";
+```
+
+The root entrypoint loads `dist/pre-print-check.wasm`, `/check` loads `dist/pre-print-check-check.wasm`, and `/fix` loads `dist/pre-print-check-fix.wasm`.
 
 `check()` returns a structured report:
 
@@ -278,7 +287,17 @@ type PrePrintCheckReport = {
 };
 ```
 
-The default loader reads `dist/pre-print-check.wasm` and `dist/wasm_exec.js` from the installed package. Browser bundlers that need explicit asset URLs can pass them:
+`fix()` returns the repaired SVG plus fix notes:
+
+```ts
+type FixResult = {
+  svg: string;
+  changes: string[];
+  skipped: string[];
+};
+```
+
+The loaders read their matching WASM binary plus `dist/wasm_exec.js` from the installed package. Browser bundlers that need explicit asset URLs can pass them:
 
 ```js
 const prePrint = await loadPrePrintCheck({
@@ -318,7 +337,7 @@ http://127.0.0.1:8765/docs/?sample=Effects%20and%20shadows&target=paper&view=ove
 make build      # native CLI
 make test       # go test ./...
 make vet        # go vet ./...
-make wasm       # dist/pre-print-check.wasm plus Go wasm_exec.js
+make wasm       # full, check-only, and fix-only WASM binaries plus Go wasm_exec.js
 npm test        # build WASM and run the JS wrapper smoke test
 ```
 
