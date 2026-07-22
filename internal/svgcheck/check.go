@@ -46,9 +46,8 @@ type Report struct {
 }
 
 type svgAnalysis struct {
-	Meta       SVGMeta
-	Endpoints  []geometryEndpoint
-	ThinShapes []locatableShape
+	Meta     SVGMeta
+	Geometry geometryEvidence
 }
 
 type locatableShape struct {
@@ -431,15 +430,7 @@ func analyzeSVG(input []byte, target Target) (svgAnalysis, error) {
 	analysis := svgAnalysis{}
 	meta := &analysis.Meta
 	colorSet := map[string]struct{}{}
-	endpoints := []geometryEndpoint{}
-	geometrySource := 0
-	styleStack := []geometryStyle{defaultGeometryStyle()}
-	var shapes []roughShape
-	var polygons []roughShape
-	var texts []roughText
-	thinCounts := map[string]int{}
-	currentText := (*textCapture)(nil)
-	mmPerUnit := float64(0)
+	geometry := newGeometryEvidenceCollector(target)
 
 	for {
 		token, err := decoder.Token()
@@ -454,8 +445,6 @@ func analyzeSVG(input []byte, target Target) (svgAnalysis, error) {
 		case xml.StartElement:
 			name := strings.ToLower(tok.Name.Local)
 			attrByName := attrsByName(tok.Attr)
-			currentStyle := inheritedGeometryStyle(styleStack[len(styleStack)-1], attrByName)
-			styleStack = append(styleStack, currentStyle)
 			if name == "svg" && !meta.FoundSVG {
 				meta.FoundSVG = true
 				for _, attr := range tok.Attr {
@@ -474,7 +463,6 @@ func analyzeSVG(input []byte, target Target) (svgAnalysis, error) {
 						}
 					}
 				}
-				mmPerUnit = physicalMMPerSVGUnit(*meta, target)
 			}
 
 			switch name {
@@ -496,8 +484,6 @@ func analyzeSVG(input []byte, target Target) (svgAnalysis, error) {
 			case "clippath":
 				meta.ClipPaths++
 			}
-			endpoints = append(endpoints, endpointsFromElement(name, attrByName, currentStyle, &geometrySource)...)
-
 			for _, attr := range tok.Attr {
 				attrName := strings.ToLower(attr.Name.Local)
 				attrValue := strings.TrimSpace(attr.Value)
@@ -515,56 +501,15 @@ func analyzeSVG(input []byte, target Target) (svgAnalysis, error) {
 				inspectAttrForPrintSignals(attrName, attrValue, meta)
 				collectColorTokens(attrValue, colorSet)
 			}
-
-			if isOverlayGeometryElement(name) && currentStyle.hasVisibleStroke() && strokeWidthLooksProductionThin(currentStyle.strokeWidth) {
-				thinCounts[strokeWidthLabel(attrByName, currentStyle)]++
-				analysis.ThinShapes = append(analysis.ThinShapes, locatableShape{name: name, attrs: attrByName})
-			}
-
-			if b, ok := roughBBox(name, attrByName); ok {
-				shapes = append(shapes, roughShape{kind: name, box: b})
-				if name == "polygon" {
-					polygons = append(polygons, roughShape{kind: name, box: b})
-				}
-				if mmPerUnit > 0 {
-					maxMM := math.Max(b.width(), b.height()) * mmPerUnit
-					if maxMM > 0 && maxMM < 1 {
-						meta.SmallShapesSub1MM++
-					}
-					if maxMM > 0 && maxMM < 2 {
-						meta.SmallShapesSub2MM++
-					}
-				}
-			}
-
-			if name == "text" {
-				currentText = newTextCapture(attrByName, currentStyle)
-			}
-			if name == "fedropshadow" && largeShadowElement(attrByName) {
-				meta.LargeShadows++
-			}
-			if backgroundTransparencyElement(name, attrByName, *meta) {
-				meta.BackgroundTransparency++
-			}
+			geometry.startElement(tok, attrByName, meta)
 		case xml.CharData:
 			meta.ExternalRefs += countExternalCSSResourceRefs(string(tok))
 			if len(tok) <= maxColorCharDataScanBytes {
 				collectColorTokens(string(tok), colorSet)
 			}
-			if currentText != nil {
-				currentText.text.WriteString(string(tok))
-			}
+			geometry.characterData(tok)
 		case xml.EndElement:
-			name := strings.ToLower(tok.Name.Local)
-			if name == "text" && currentText != nil {
-				if text, ok := currentText.toRoughText(); ok {
-					texts = append(texts, text)
-				}
-				currentText = nil
-			}
-			if len(styleStack) > 1 {
-				styleStack = styleStack[:len(styleStack)-1]
-			}
+			geometry.endElement(tok)
 		}
 	}
 
@@ -572,18 +517,8 @@ func analyzeSVG(input []byte, target Target) (svgAnalysis, error) {
 		return svgAnalysis{}, fmt.Errorf("no root <svg> element found")
 	}
 	meta.UniqueColors = len(colorSet)
-	meta.NearDisconnected = countNearDisconnectedEndpoints(endpoints)
-	analysis.Endpoints = endpoints
-	meta.ThinStrokeSummaries = strokeSummaries(thinCounts)
-	if len(meta.ThinStrokeSummaries) > 0 {
-		meta.ThinStrokes = 0
-		for _, summary := range meta.ThinStrokeSummaries {
-			meta.ThinStrokes += summary.Count
-		}
-	}
-	meta.TextShapeOverlaps = textPolygonOverlaps(texts, polygons)
-	meta.SubtleEffects = subtleEffectCount(*meta)
-	meta.MissingBleedShapes, meta.SafeAreaRiskShapes = bleedAndSafeAreaRisks(*meta, target, shapes, texts)
+	evidence := geometry.finish(meta)
+	analysis.Geometry = evidence
 	return analysis, nil
 }
 
@@ -1699,14 +1634,6 @@ const (
 	nearEndpointMaxDistance      = 12.0
 	nearDisconnectedMinimumPairs = 2
 )
-
-func countNearDisconnectedEndpoints(endpoints []geometryEndpoint) int {
-	pairs := nearDisconnectedEndpointPairs(endpoints)
-	if len(pairs) < nearDisconnectedMinimumPairs {
-		return 0
-	}
-	return len(pairs)
-}
 
 type nearEndpointPair struct {
 	a, b     geometryEndpoint

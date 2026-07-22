@@ -1,11 +1,24 @@
 package svgcheck_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/justsml/pre-print-check/svgcheck"
 )
+
+func TestPublicTypesAreOwnedByPublicPackage(t *testing.T) {
+	for name, value := range map[string]any{
+		"Report": svgcheck.Report{},
+		"Issue":  svgcheck.Issue{},
+		"Target": svgcheck.Target{},
+	} {
+		if got := reflect.TypeOf(value).PkgPath(); got != "github.com/justsml/pre-print-check/svgcheck" {
+			t.Fatalf("%s is owned by %q, want public svgcheck package", name, got)
+		}
+	}
+}
 
 func TestPublicPackageChecksSVG(t *testing.T) {
 	report, err := svgcheck.Check([]byte(`<svg width="100" height="50"><script>alert(1)</script></svg>`), "paper")

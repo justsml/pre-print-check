@@ -12,10 +12,10 @@ type OverlayOptions struct {
 }
 
 type overlayData struct {
-	Meta       SVGMeta
-	Report     Report
-	Endpoints  []geometryEndpoint
-	ThinShapes []locatableShape
+	Meta                  SVGMeta
+	Report                Report
+	NearDisconnectedPairs []nearEndpointPair
+	ThinShapes            []locatableShape
 }
 
 func GenerateOverlay(input []byte, opts OverlayOptions) ([]byte, error) {
@@ -25,10 +25,10 @@ func GenerateOverlay(input []byte, opts OverlayOptions) ([]byte, error) {
 	}
 	data := overlayData{Meta: report.Meta, Report: report}
 	if reportHasAnyIssue(report, "near-disconnected-lines") {
-		data.Endpoints = analysis.Endpoints
+		data.NearDisconnectedPairs = analysis.Geometry.NearDisconnectedPairs
 	}
 	if reportHasAnyIssue(report, "thin-stroke") {
-		data.ThinShapes = analysis.ThinShapes
+		data.ThinShapes = analysis.Geometry.ThinShapes
 	}
 
 	var out strings.Builder
@@ -60,7 +60,7 @@ func GenerateOverlay(input []byte, opts OverlayOptions) ([]byte, error) {
 
 	out.WriteString(`<g id="pre-print-check-overlay" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">` + "\n")
 	writeThinShapeHighlights(&out, data.ThinShapes, scale)
-	writeNearDisconnectedHighlights(&out, data.Endpoints, scale)
+	writeNearDisconnectedHighlights(&out, data.NearDisconnectedPairs, scale)
 	writeOverlayPanel(&out, data.Report, panelX, panelY, panelWidth, panelScale)
 	out.WriteString("</g>\n</svg>\n")
 	return []byte(out.String()), nil
@@ -90,8 +90,7 @@ func writeThinShapeHighlights(out *strings.Builder, shapes []locatableShape, sca
 	out.WriteString("</g>\n")
 }
 
-func writeNearDisconnectedHighlights(out *strings.Builder, endpoints []geometryEndpoint, scale float64) {
-	pairs := nearDisconnectedEndpointPairs(endpoints)
+func writeNearDisconnectedHighlights(out *strings.Builder, pairs []nearEndpointPair, scale float64) {
 	if len(pairs) < nearDisconnectedMinimumPairs {
 		return
 	}
@@ -171,15 +170,6 @@ func writeHighlightedGeometry(out *strings.Builder, shape locatableShape, stroke
 	case "path":
 		fmt.Fprintf(out, `<path d="%s"%s fill="none" stroke="%s" stroke-width="%s" stroke-linecap="round" stroke-linejoin="round" opacity="%s" pointer-events="none"/>`+"\n",
 			escapeAttr(shape.attrs["d"]), transformAttr(shape.attrs), stroke, trimFloat(strokeWidth), trimFloat(opacity))
-	}
-}
-
-func isOverlayGeometryElement(name string) bool {
-	switch name {
-	case "line", "polyline", "polygon", "path":
-		return true
-	default:
-		return false
 	}
 }
 

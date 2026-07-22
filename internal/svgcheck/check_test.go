@@ -47,7 +47,7 @@ func TestNamespaceDoesNotCountAsExternalReference(t *testing.T) {
 }
 
 func TestAnalyzeSVGCollectsReportAndOverlayEvidenceInOneResult(t *testing.T) {
-	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M 10 10 L 30 10" stroke="black" stroke-width="0.2"/><path d="M 31 10 L 50 10" stroke="black" stroke-width="0.2"/></svg>`)
+	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M 10 10 L 30 10" stroke="black" stroke-width="0.2"/><path d="M 30.1 10 L 50 10" stroke="black" stroke-width="0.2"/></svg>`)
 	target, err := ParseTarget("paper@10in")
 	if err != nil {
 		t.Fatalf("ParseTarget returned error: %v", err)
@@ -60,11 +60,11 @@ func TestAnalyzeSVGCollectsReportAndOverlayEvidenceInOneResult(t *testing.T) {
 	if analysis.Meta.ThinStrokes != 2 {
 		t.Fatalf("expected two thin strokes, got %#v", analysis.Meta.ThinStrokeSummaries)
 	}
-	if len(analysis.ThinShapes) != 2 {
-		t.Fatalf("expected two locatable thin shapes, got %#v", analysis.ThinShapes)
+	if len(analysis.Geometry.ThinShapes) != 2 {
+		t.Fatalf("expected two locatable thin shapes, got %#v", analysis.Geometry.ThinShapes)
 	}
-	if len(analysis.Endpoints) != 4 {
-		t.Fatalf("expected four geometry endpoints, got %#v", analysis.Endpoints)
+	if len(analysis.Geometry.NearDisconnectedPairs) != 1 {
+		t.Fatalf("expected one locatable near-disconnected pair, got %#v", analysis.Geometry.NearDisconnectedPairs)
 	}
 }
 
@@ -431,7 +431,7 @@ func TestTargetProfilesApplyOnlyRelevantProductionChecks(t *testing.T) {
 			}
 			for _, code := range tt.wantCodes {
 				if !hasIssueCode(report, code) {
-					t.Fatalf("expected issue %q in %#v", code, report.Issues)
+					t.Fatalf("expected issue %q in %#v (thin strokes: %d, summaries: %#v)", code, report.Issues, report.Meta.ThinStrokes, report.Meta.ThinStrokeSummaries)
 				}
 			}
 			for _, code := range tt.denyCodes {

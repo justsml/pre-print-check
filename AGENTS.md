@@ -4,11 +4,12 @@
 
 - `main.go` is the executable entry point.
 - `internal/cli/` owns command parsing, user-facing output, exit codes, and file I/O.
-- `internal/svgcheck/` owns SVG inspection, target parsing, issue generation, and fixes.
-- Tests live beside the package they cover, currently in `internal/svgcheck/check_test.go`.
+- `svgcheck/` owns the stable public Go interface and Portable Report projection.
+- `internal/svgcheck/` owns private SVG analysis, geometry evidence, issue generation, and fixes.
+- Tests live beside the package they cover in `svgcheck/` and `internal/svgcheck/`.
 - `README.md` documents user-facing behavior and example CLI usage.
 
-Keep new code inside `internal/` unless it is part of the top-level command bootstrap.
+Keep implementation details inside `internal/`. Add code to `svgcheck/` only when it belongs to the stable public interface.
 
 ## Build, Test, and Development Commands
 

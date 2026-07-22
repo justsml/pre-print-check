@@ -349,7 +349,8 @@ Project layout:
 
 - `main.go` boots the native command.
 - `internal/cli/` owns command parsing, user-facing output, exit codes, and file I/O.
-- `internal/svgcheck/` owns SVG inspection, target parsing, issues, overlays, and fixes.
+- `svgcheck/` owns the stable public Go interface and Portable Report projection.
+- `internal/svgcheck/` owns private SVG analysis, geometry evidence, finding generation, overlays, and fixes.
 - `cmd/preprintcheck-wasm/` exposes the checker to JavaScript through Go WASM.
 - `npm/` wraps the WASM runtime as the `pre-print-check` npm package.
 - `docs/` contains the local browser demo.
