@@ -21,7 +21,7 @@ type FixResult struct {
 }
 
 func Fix(input []byte, opts FixOptions) (FixResult, error) {
-	report, err := Check(input, opts.Target)
+	report, analysis, err := checkWithDetails(input, opts.Target)
 	if err != nil {
 		return FixResult{}, err
 	}
@@ -31,24 +31,16 @@ func Fix(input []byte, opts FixOptions) (FixResult, error) {
 	}
 
 	out := input
+	meta := analysis.Meta
+	target := report.Target
 	changes := []string{}
 	skipped := []string{}
 
 	var changed []string
 	if categoryEnabled(categories, FixCategoryMetadata) {
-		out, changed = fixMetadata(out)
+		out, meta, changed = fixMetadata(out, meta)
 		changes = append(changes, changed...)
 	}
-
-	meta, err := inspect(out)
-	if err != nil {
-		return FixResult{}, err
-	}
-	target, err := ParseTarget(opts.Target)
-	if err != nil {
-		return FixResult{}, err
-	}
-	enrichProductionDetails(out, target, &meta)
 
 	if categoryEnabled(categories, FixCategoryBleed) {
 		out, changed = fixBleed(out, target, meta)
@@ -59,7 +51,7 @@ func Fix(input []byte, opts FixOptions) (FixResult, error) {
 		if opts.Unsafe {
 			out, changed = fixSafety(out)
 			changes = append(changes, changed...)
-		} else if meta.Scripts > 0 || meta.EventAttrs > 0 || reportHasAnyIssue(report, "script", "event-handler") {
+		} else if meta.Scripts > 0 || meta.EventAttrs > 0 || reportHasAutomaticFix(report, FixCategorySafety) {
 			skipped = append(skipped, "safety fixes require --unsafe before removing scripts or inline event handlers")
 		}
 	}
@@ -68,7 +60,7 @@ func Fix(input []byte, opts FixOptions) (FixResult, error) {
 		if opts.Unsafe {
 			out, changed = fixEffects(out)
 			changes = append(changes, changed...)
-		} else if meta.Filters > 0 || meta.FilterRefs > 0 || meta.Masks > 0 || meta.ClipPaths > 0 || meta.Opacity > 0 || meta.BlendModes > 0 || reportHasAnyIssue(report, "shadow-effect", "effects-may-not-output", "print-effects-require-flattening", "fabric-effects", "large-format-effects") {
+		} else if meta.Filters > 0 || meta.FilterRefs > 0 || meta.Masks > 0 || meta.ClipPaths > 0 || meta.Opacity > 0 || meta.BlendModes > 0 || reportHasAutomaticFix(report, FixCategoryEffects) {
 			skipped = append(skipped, "effects fixes require --unsafe because removing filters, masks, opacity, or blend modes changes rendering")
 		}
 	}
@@ -77,7 +69,7 @@ func Fix(input []byte, opts FixOptions) (FixResult, error) {
 		if opts.Unsafe {
 			out, changed = fixRaster(out)
 			changes = append(changes, changed...)
-		} else if meta.RasterImages > 0 || meta.InlineRasterImages > 0 || reportHasAnyIssue(report, "raster-image", "inline-raster-image", "raster-not-cuttable", "large-format-raster") {
+		} else if meta.RasterImages > 0 || meta.InlineRasterImages > 0 || reportHasAutomaticFix(report, FixCategoryRaster) {
 			skipped = append(skipped, "raster fixes require --unsafe because removing embedded images changes artwork")
 		}
 	}
@@ -234,34 +226,29 @@ func categoryEnabled(categories map[FixCategory]bool, category FixCategory) bool
 	return categories[category]
 }
 
-func fixMetadata(input []byte) ([]byte, []string) {
+func fixMetadata(input []byte, meta SVGMeta) ([]byte, SVGMeta, []string) {
 	out := input
 	changes := []string{}
-
-	meta, err := inspect(out)
-	if err != nil {
-		return input, nil
-	}
 
 	if !meta.HasXMLNS {
 		updated, changed := addRootAttribute(out, `xmlns="http://www.w3.org/2000/svg"`)
 		if changed {
 			out = updated
+			meta.HasXMLNS = true
 			changes = append(changes, "added SVG namespace")
 		}
 	}
 
-	meta, _ = inspect(out)
 	if meta.ViewBox == "" && meta.WidthPixels > 0 && meta.HeightPixels > 0 {
-		viewBox := fmt.Sprintf(`viewBox="0 0 %s %s"`, trimFloat(meta.WidthPixels), trimFloat(meta.HeightPixels))
-		updated, changed := addRootAttribute(out, viewBox)
+		viewBox := fmt.Sprintf("0 0 %s %s", trimFloat(meta.WidthPixels), trimFloat(meta.HeightPixels))
+		updated, changed := addRootAttribute(out, fmt.Sprintf(`viewBox="%s"`, viewBox))
 		if changed {
 			out = updated
+			meta.ViewBox = viewBox
 			changes = append(changes, "added viewBox derived from width and height")
 		}
 	}
 
-	meta, _ = inspect(out)
 	if (meta.Width == "" || meta.Height == "") && meta.ViewBox != "" {
 		minX, minY, width, height := parseViewBoxOrDefault(meta.ViewBox)
 		_ = minX
@@ -271,21 +258,24 @@ func fixMetadata(input []byte) ([]byte, []string) {
 				updated, changed := addRootAttribute(out, fmt.Sprintf(`width="%s"`, trimFloat(width)))
 				if changed {
 					out = updated
+					meta.Width = trimFloat(width)
+					meta.WidthPixels = width
 					changes = append(changes, "added width derived from viewBox")
 				}
 			}
-			meta, _ = inspect(out)
 			if meta.Height == "" {
 				updated, changed := addRootAttribute(out, fmt.Sprintf(`height="%s"`, trimFloat(height)))
 				if changed {
 					out = updated
+					meta.Height = trimFloat(height)
+					meta.HeightPixels = height
 					changes = append(changes, "added height derived from viewBox")
 				}
 			}
 		}
 	}
 
-	return out, changes
+	return out, meta, changes
 }
 
 func fixSafety(input []byte) ([]byte, []string) {
@@ -394,37 +384,6 @@ func expandBleedRects(input []byte, canvas box, bleedMargin float64) ([]byte, in
 		setAttr(&start, "height", trimFloat(canvas.height()+bleedMargin*2))
 		return start, true
 	})
-}
-
-func advisoryFixNotes(report Report, categories map[FixCategory]bool) []string {
-	type advisory struct {
-		category FixCategory
-		codes    []string
-		message  string
-	}
-	advisories := []advisory{
-		{FixCategoryReferences, []string{"external-reference", "packaging-external-reference"}, "external references need manual packaging or embedding"},
-		{FixCategoryColors, []string{"color-count", "rgb-colors-for-print", "cmyk-in-svg", "many-fabric-colors"}, "color fixes need manual CMYK/spot-color conversion and proofing"},
-		{FixCategoryStrokes, []string{"thin-stroke"}, "thin strokes need manual review before thickening or outlining"},
-		{FixCategoryGeometry, []string{"near-disconnected-lines"}, "near-disconnected line joins need manual node joining or shape rebuilding"},
-		{FixCategoryTypography, []string{"text-not-outlined", "text-overlap-shapes"}, "text fixes need manual outlining, knockouts, or layout changes"},
-		{FixCategoryDetail, []string{"small-detail-durability"}, "small-detail durability fixes need manual simplification or production-method changes"},
-		{FixCategorySizing, []string{"low-effective-ppi", "modest-effective-ppi", "oversized-for-target", "target-size-recommended"}, "sizing/resolution fixes need a chosen physical output size or higher-resolution source art"},
-		{FixCategoryCutter, []string{"raster-not-cuttable", "effects-may-not-output"}, "cutter fixes may need manual path reconstruction; use --unsafe --fix raster,effects only to strip incompatible content"},
-		{FixCategoryBleed, []string{"safe-area-risk"}, "safe-area fixes need manual layout movement inward from trim"},
-		{FixCategoryEffects, []string{"background-transparency"}, "background transparency fixes need the intended substrate/background color"},
-	}
-
-	var notes []string
-	for _, item := range advisories {
-		if !categories[item.category] {
-			continue
-		}
-		if reportHasAnyIssue(report, item.codes...) {
-			notes = append(notes, item.message)
-		}
-	}
-	return notes
 }
 
 func reportHasAnyIssue(report Report, codes ...string) bool {

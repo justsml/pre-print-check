@@ -29,10 +29,13 @@ const (
 )
 
 type Issue struct {
-	Severity Severity
-	Code     string
-	Message  string
-	Rank     FindingRank
+	Severity       Severity
+	Code           string
+	Message        string
+	Rank           FindingRank
+	FixCategory    FixCategory
+	UnsafeRequired bool
+	AutomaticFix   bool
 }
 
 type Report struct {
@@ -42,8 +45,15 @@ type Report struct {
 	Issues []Issue
 }
 
-type inspectionDetails struct {
-	endpoints []geometryEndpoint
+type svgAnalysis struct {
+	Meta       SVGMeta
+	Endpoints  []geometryEndpoint
+	ThinShapes []locatableShape
+}
+
+type locatableShape struct {
+	name  string
+	attrs map[string]string
 }
 
 type SVGMeta struct {
@@ -125,22 +135,22 @@ func Check(input []byte, rawTarget string) (Report, error) {
 	return report, err
 }
 
-func checkWithDetails(input []byte, rawTarget string) (Report, inspectionDetails, error) {
+func checkWithDetails(input []byte, rawTarget string) (Report, svgAnalysis, error) {
 	target, err := ParseTarget(rawTarget)
 	if err != nil {
-		return Report{}, inspectionDetails{}, err
+		return Report{}, svgAnalysis{}, err
 	}
 
-	meta, details, err := inspectForTarget(input, target)
+	analysis, err := analyzeSVG(input, target)
 	if err != nil {
-		return Report{}, inspectionDetails{}, err
+		return Report{}, svgAnalysis{}, err
 	}
 
-	report := Report{Target: target, Meta: meta}
+	report := Report{Target: target, Meta: analysis.Meta}
 	profile := issueProfileForTarget(target)
 	report.addCoreIssues(profile)
 	report.addTargetIssues()
-	return report, details, nil
+	return report, analysis, nil
 }
 
 func (r Report) HasErrors() bool {
@@ -404,27 +414,22 @@ func (r *Report) addIssue(severity Severity, code, message string) {
 }
 
 func (r *Report) addRankedIssue(severity Severity, code, message string, rank FindingRank) {
+	policy := findingPolicyForCode(code)
 	r.Issues = append(r.Issues, Issue{
-		Severity: severity,
-		Code:     code,
-		Message:  message,
-		Rank:     rank,
+		Severity:       severity,
+		Code:           code,
+		Message:        message,
+		Rank:           rank,
+		FixCategory:    policy.FixCategory,
+		UnsafeRequired: policy.UnsafeRequired,
+		AutomaticFix:   policy.AutomaticFix,
 	})
 }
 
-func inspect(input []byte) (SVGMeta, error) {
-	meta, _, err := inspectWithOptions(input, Target{}, false)
-	return meta, err
-}
-
-func inspectForTarget(input []byte, target Target) (SVGMeta, inspectionDetails, error) {
-	return inspectWithOptions(input, target, true)
-}
-
-func inspectWithOptions(input []byte, target Target, productionDetails bool) (SVGMeta, inspectionDetails, error) {
+func analyzeSVG(input []byte, target Target) (svgAnalysis, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(input))
-	meta := SVGMeta{}
-	details := inspectionDetails{}
+	analysis := svgAnalysis{}
+	meta := &analysis.Meta
 	colorSet := map[string]struct{}{}
 	endpoints := []geometryEndpoint{}
 	geometrySource := 0
@@ -442,7 +447,7 @@ func inspectWithOptions(input []byte, target Target, productionDetails bool) (SV
 			break
 		}
 		if err != nil {
-			return meta, details, fmt.Errorf("invalid SVG XML: %w", err)
+			return svgAnalysis{}, fmt.Errorf("invalid SVG XML: %w", err)
 		}
 
 		switch tok := token.(type) {
@@ -469,7 +474,7 @@ func inspectWithOptions(input []byte, target Target, productionDetails bool) (SV
 						}
 					}
 				}
-				mmPerUnit = physicalMMPerSVGUnit(meta, target)
+				mmPerUnit = physicalMMPerSVGUnit(*meta, target)
 			}
 
 			switch name {
@@ -507,131 +512,16 @@ func inspectWithOptions(input []byte, target Target, productionDetails bool) (SV
 				if isResourceReferenceAttr(attrName) && referencesExternalResource(attrValue) {
 					meta.ExternalRefs++
 				}
-				inspectAttrForPrintSignals(attrName, attrValue, &meta)
+				inspectAttrForPrintSignals(attrName, attrValue, meta)
 				collectColorTokens(attrValue, colorSet)
 			}
 
-			if productionDetails {
-				if isOverlayGeometryElement(name) && currentStyle.hasVisibleStroke() && strokeWidthLooksProductionThin(currentStyle.strokeWidth) {
-					thinCounts[strokeWidthLabel(attrByName, currentStyle)]++
-				}
-
-				if b, ok := roughBBox(name, attrByName); ok {
-					shapes = append(shapes, roughShape{kind: name, box: b})
-					if name == "polygon" {
-						polygons = append(polygons, roughShape{kind: name, box: b})
-					}
-					if mmPerUnit > 0 {
-						maxMM := math.Max(b.width(), b.height()) * mmPerUnit
-						if maxMM > 0 && maxMM < 1 {
-							meta.SmallShapesSub1MM++
-						}
-						if maxMM > 0 && maxMM < 2 {
-							meta.SmallShapesSub2MM++
-						}
-					}
-				}
-
-				if name == "text" {
-					currentText = newTextCapture(attrByName, currentStyle)
-				}
-				if name == "fedropshadow" && largeShadowElement(attrByName) {
-					meta.LargeShadows++
-				}
-				if backgroundTransparencyElement(name, attrByName, meta) {
-					meta.BackgroundTransparency++
-				}
-			}
-		case xml.CharData:
-			meta.ExternalRefs += countExternalCSSResourceRefs(string(tok))
-			if len(tok) <= maxColorCharDataScanBytes {
-				collectColorTokens(string(tok), colorSet)
-			}
-			if productionDetails && currentText != nil {
-				currentText.text.WriteString(string(tok))
-			}
-		case xml.EndElement:
-			if productionDetails {
-				name := strings.ToLower(tok.Name.Local)
-				if name == "text" && currentText != nil {
-					if text, ok := currentText.toRoughText(); ok {
-						texts = append(texts, text)
-					}
-					currentText = nil
-				}
-			}
-			if len(styleStack) > 1 {
-				styleStack = styleStack[:len(styleStack)-1]
-			}
-		}
-	}
-
-	if !meta.FoundSVG {
-		return meta, details, fmt.Errorf("no root <svg> element found")
-	}
-	meta.UniqueColors = len(colorSet)
-	meta.NearDisconnected = countNearDisconnectedEndpoints(endpoints)
-	details.endpoints = endpoints
-	if productionDetails {
-		meta.ThinStrokeSummaries = strokeSummaries(thinCounts)
-		if len(meta.ThinStrokeSummaries) > 0 {
-			meta.ThinStrokes = 0
-			for _, summary := range meta.ThinStrokeSummaries {
-				meta.ThinStrokes += summary.Count
-			}
-		}
-		meta.TextShapeOverlaps = textPolygonOverlaps(texts, polygons)
-		meta.SubtleEffects = subtleEffectCount(meta)
-		meta.MissingBleedShapes, meta.SafeAreaRiskShapes = bleedAndSafeAreaRisks(meta, target, shapes, texts)
-	}
-	return meta, details, nil
-}
-
-type roughShape struct {
-	kind string
-	box  box
-}
-
-type roughText struct {
-	text string
-	box  box
-}
-
-type box struct {
-	x1, y1, x2, y2 float64
-}
-
-func enrichProductionDetails(input []byte, target Target, meta *SVGMeta) {
-	decoder := xml.NewDecoder(bytes.NewReader(input))
-	styleStack := []geometryStyle{defaultGeometryStyle()}
-	var shapes []roughShape
-	var polygons []roughShape
-	var texts []roughText
-	thinCounts := map[string]int{}
-	currentText := (*textCapture)(nil)
-	mmPerUnit := physicalMMPerSVGUnit(*meta, target)
-
-	for {
-		token, err := decoder.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return
-		}
-
-		switch tok := token.(type) {
-		case xml.StartElement:
-			name := strings.ToLower(tok.Name.Local)
-			attr := attrsByName(tok.Attr)
-			style := inheritedGeometryStyle(styleStack[len(styleStack)-1], attr)
-			styleStack = append(styleStack, style)
-
-			if isOverlayGeometryElement(name) && style.hasVisibleStroke() && strokeWidthLooksProductionThin(style.strokeWidth) {
-				thinCounts[strokeWidthLabel(attr, style)]++
+			if isOverlayGeometryElement(name) && currentStyle.hasVisibleStroke() && strokeWidthLooksProductionThin(currentStyle.strokeWidth) {
+				thinCounts[strokeWidthLabel(attrByName, currentStyle)]++
+				analysis.ThinShapes = append(analysis.ThinShapes, locatableShape{name: name, attrs: attrByName})
 			}
 
-			if b, ok := roughBBox(name, attr); ok {
+			if b, ok := roughBBox(name, attrByName); ok {
 				shapes = append(shapes, roughShape{kind: name, box: b})
 				if name == "polygon" {
 					polygons = append(polygons, roughShape{kind: name, box: b})
@@ -648,15 +538,19 @@ func enrichProductionDetails(input []byte, target Target, meta *SVGMeta) {
 			}
 
 			if name == "text" {
-				currentText = newTextCapture(attr, style)
+				currentText = newTextCapture(attrByName, currentStyle)
 			}
-			if name == "fedropshadow" && largeShadowElement(attr) {
+			if name == "fedropshadow" && largeShadowElement(attrByName) {
 				meta.LargeShadows++
 			}
-			if backgroundTransparencyElement(name, attr, *meta) {
+			if backgroundTransparencyElement(name, attrByName, *meta) {
 				meta.BackgroundTransparency++
 			}
 		case xml.CharData:
+			meta.ExternalRefs += countExternalCSSResourceRefs(string(tok))
+			if len(tok) <= maxColorCharDataScanBytes {
+				collectColorTokens(string(tok), colorSet)
+			}
 			if currentText != nil {
 				currentText.text.WriteString(string(tok))
 			}
@@ -674,6 +568,12 @@ func enrichProductionDetails(input []byte, target Target, meta *SVGMeta) {
 		}
 	}
 
+	if !meta.FoundSVG {
+		return svgAnalysis{}, fmt.Errorf("no root <svg> element found")
+	}
+	meta.UniqueColors = len(colorSet)
+	meta.NearDisconnected = countNearDisconnectedEndpoints(endpoints)
+	analysis.Endpoints = endpoints
 	meta.ThinStrokeSummaries = strokeSummaries(thinCounts)
 	if len(meta.ThinStrokeSummaries) > 0 {
 		meta.ThinStrokes = 0
@@ -684,6 +584,21 @@ func enrichProductionDetails(input []byte, target Target, meta *SVGMeta) {
 	meta.TextShapeOverlaps = textPolygonOverlaps(texts, polygons)
 	meta.SubtleEffects = subtleEffectCount(*meta)
 	meta.MissingBleedShapes, meta.SafeAreaRiskShapes = bleedAndSafeAreaRisks(*meta, target, shapes, texts)
+	return analysis, nil
+}
+
+type roughShape struct {
+	kind string
+	box  box
+}
+
+type roughText struct {
+	text string
+	box  box
+}
+
+type box struct {
+	x1, y1, x2, y2 float64
 }
 
 type textCapture struct {

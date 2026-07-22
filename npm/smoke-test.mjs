@@ -13,7 +13,11 @@ assert.equal(typeof require("pre-print-check/fix").fix, "function");
 
 const report = await check(unsafeSVG, { target: "vinyl" });
 assert.equal(report.counts.errors, 2);
-assert.ok(report.issues.some((issue) => issue.code === "script"));
+const scriptIssue = report.issues.find((issue) => issue.code === "script");
+assert.ok(scriptIssue);
+assert.equal(scriptIssue.fixCategory, "safety");
+assert.equal(scriptIssue.unsafeRequired, true);
+assert.equal(scriptIssue.automaticFix, true);
 assert.ok(report.issues.some((issue) => issue.code === "event-handler"));
 
 const categories = await fixCategories();

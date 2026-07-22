@@ -46,6 +46,59 @@ func TestNamespaceDoesNotCountAsExternalReference(t *testing.T) {
 	}
 }
 
+func TestAnalyzeSVGCollectsReportAndOverlayEvidenceInOneResult(t *testing.T) {
+	input := []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M 10 10 L 30 10" stroke="black" stroke-width="0.2"/><path d="M 31 10 L 50 10" stroke="black" stroke-width="0.2"/></svg>`)
+	target, err := ParseTarget("paper@10in")
+	if err != nil {
+		t.Fatalf("ParseTarget returned error: %v", err)
+	}
+
+	analysis, err := analyzeSVG(input, target)
+	if err != nil {
+		t.Fatalf("analyzeSVG returned error: %v", err)
+	}
+	if analysis.Meta.ThinStrokes != 2 {
+		t.Fatalf("expected two thin strokes, got %#v", analysis.Meta.ThinStrokeSummaries)
+	}
+	if len(analysis.ThinShapes) != 2 {
+		t.Fatalf("expected two locatable thin shapes, got %#v", analysis.ThinShapes)
+	}
+	if len(analysis.Endpoints) != 4 {
+		t.Fatalf("expected four geometry endpoints, got %#v", analysis.Endpoints)
+	}
+}
+
+func TestIssuesCarryCentralRemediationPolicy(t *testing.T) {
+	report, err := Check([]byte(`<svg width="100" height="50"><script>alert(1)</script><image href="photo.png"/><path d="M 0 0 L 10 10" stroke="black" stroke-width="0.2"/></svg>`), "vinyl")
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+
+	script := issueByCode(report, "script")
+	if script == nil {
+		t.Fatal("expected script issue")
+	}
+	if script.FixCategory != FixCategorySafety || !script.UnsafeRequired || !script.AutomaticFix {
+		t.Fatalf("unexpected script remediation policy: %#v", script)
+	}
+
+	raster := issueByCode(report, "raster-not-cuttable")
+	if raster == nil {
+		t.Fatal("expected raster-not-cuttable issue")
+	}
+	if raster.FixCategory != FixCategoryRaster || !raster.UnsafeRequired || !raster.AutomaticFix {
+		t.Fatalf("unexpected raster remediation policy: %#v", raster)
+	}
+
+	thinStroke := issueByCode(report, "thin-stroke")
+	if thinStroke == nil {
+		t.Fatal("expected thin-stroke issue")
+	}
+	if thinStroke.FixCategory != FixCategoryStrokes || thinStroke.UnsafeRequired || thinStroke.AutomaticFix {
+		t.Fatalf("unexpected thin-stroke remediation policy: %#v", thinStroke)
+	}
+}
+
 func TestFixAddsSafeRootAttributes(t *testing.T) {
 	result, err := Fix([]byte(`<svg width="100" height="50"><rect /></svg>`), FixOptions{})
 	if err != nil {

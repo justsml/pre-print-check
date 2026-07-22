@@ -13,61 +13,14 @@ import (
 )
 
 type apiResponse struct {
-	OK            bool       `json:"ok"`
-	Error         string     `json:"error,omitempty"`
-	Report        *apiReport `json:"report,omitempty"`
-	Overlay       string     `json:"overlay,omitempty"`
-	SVG           string     `json:"svg,omitempty"`
-	Changes       []string   `json:"changes,omitempty"`
-	Skipped       []string   `json:"skipped,omitempty"`
-	FixCategories []string   `json:"fixCategories,omitempty"`
-}
-
-type apiReport struct {
-	Summary         string     `json:"summary"`
-	FriendlySummary string     `json:"friendlySummary"`
-	Target          string     `json:"target,omitempty"`
-	TargetDetails   string     `json:"targetDetails,omitempty"`
-	Counts          apiCounts  `json:"counts"`
-	Meta            apiMeta    `json:"meta"`
-	Issues          []apiIssue `json:"issues"`
-	FixCategories   []string   `json:"fixCategories"`
-}
-
-type apiCounts struct {
-	Errors   int `json:"errors"`
-	Warnings int `json:"warnings"`
-	Info     int `json:"info"`
-}
-
-type apiMeta struct {
-	Width                  string `json:"width,omitempty"`
-	Height                 string `json:"height,omitempty"`
-	ViewBox                string `json:"viewBox,omitempty"`
-	RasterImages           int    `json:"rasterImages"`
-	InlineRasterImages     int    `json:"inlineRasterImages"`
-	TextElements           int    `json:"textElements"`
-	Filters                int    `json:"filters"`
-	FilterRefs             int    `json:"filterRefs"`
-	Shadows                int    `json:"shadows"`
-	UniqueColors           int    `json:"uniqueColors"`
-	ThinStrokes            int    `json:"thinStrokes"`
-	NearDisconnected       int    `json:"nearDisconnected"`
-	SmallShapesSub1MM      int    `json:"smallShapesSub1mm"`
-	SmallShapesSub2MM      int    `json:"smallShapesSub2mm"`
-	MissingBleedShapes     int    `json:"missingBleedShapes"`
-	SafeAreaRiskShapes     int    `json:"safeAreaRiskShapes"`
-	BackgroundTransparency int    `json:"backgroundTransparency"`
-}
-
-type apiIssue struct {
-	Severity       string `json:"severity"`
-	Code           string `json:"code"`
-	Message        string `json:"message"`
-	Rank           string `json:"rank,omitempty"`
-	FixCategory    string `json:"fixCategory,omitempty"`
-	UnsafeRequired bool   `json:"unsafeRequired,omitempty"`
-	AutomaticFix   bool   `json:"automaticFix"`
+	OK            bool                     `json:"ok"`
+	Error         string                   `json:"error,omitempty"`
+	Report        *svgcheck.PortableReport `json:"report,omitempty"`
+	Overlay       string                   `json:"overlay,omitempty"`
+	SVG           string                   `json:"svg,omitempty"`
+	Changes       []string                 `json:"changes,omitempty"`
+	Skipped       []string                 `json:"skipped,omitempty"`
+	FixCategories []string                 `json:"fixCategories,omitempty"`
 }
 
 var registeredFuncs []js.Func
@@ -133,7 +86,8 @@ func check(args []js.Value) apiResponse {
 	if err != nil {
 		return apiResponse{OK: false, Error: err.Error()}
 	}
-	return apiResponse{OK: true, Report: webReport(report)}
+	portable := svgcheck.ProjectReport(report)
+	return apiResponse{OK: true, Report: &portable}
 }
 
 func overlay(args []js.Value) apiResponse {
@@ -228,79 +182,4 @@ func stringArrayProp(value js.Value, name string) []string {
 		}
 	}
 	return out
-}
-
-func webReport(report svgcheck.Report) *apiReport {
-	errors, warnings, info := report.IssueCounts()
-	issues := make([]apiIssue, 0, len(report.Issues))
-	fixSeen := map[string]bool{}
-	var fixCategories []string
-
-	for _, issue := range report.Issues {
-		category, unsafeRequired, automaticFix := issueFixAction(issue.Code)
-		if automaticFix && !fixSeen[category] {
-			fixSeen[category] = true
-			fixCategories = append(fixCategories, category)
-		}
-		issues = append(issues, apiIssue{
-			Severity:       string(issue.Severity),
-			Code:           issue.Code,
-			Message:        issue.Message,
-			Rank:           string(issue.Rank),
-			FixCategory:    category,
-			UnsafeRequired: unsafeRequired,
-			AutomaticFix:   automaticFix,
-		})
-	}
-
-	targetDetails := ""
-	if report.Target.Raw != "" {
-		targetDetails = report.Target.Description()
-	}
-
-	return &apiReport{
-		Summary:         report.Summary(),
-		FriendlySummary: report.FriendlySummary(),
-		Target:          report.Target.Raw,
-		TargetDetails:   targetDetails,
-		Counts:          apiCounts{Errors: errors, Warnings: warnings, Info: info},
-		Meta: apiMeta{
-			Width:                  report.Meta.Width,
-			Height:                 report.Meta.Height,
-			ViewBox:                report.Meta.ViewBox,
-			RasterImages:           report.Meta.RasterImages,
-			InlineRasterImages:     report.Meta.InlineRasterImages,
-			TextElements:           report.Meta.TextElements,
-			Filters:                report.Meta.Filters,
-			FilterRefs:             report.Meta.FilterRefs,
-			Shadows:                report.Meta.Shadows,
-			UniqueColors:           report.Meta.UniqueColors,
-			ThinStrokes:            report.Meta.ThinStrokes,
-			NearDisconnected:       report.Meta.NearDisconnected,
-			SmallShapesSub1MM:      report.Meta.SmallShapesSub1MM,
-			SmallShapesSub2MM:      report.Meta.SmallShapesSub2MM,
-			MissingBleedShapes:     report.Meta.MissingBleedShapes,
-			SafeAreaRiskShapes:     report.Meta.SafeAreaRiskShapes,
-			BackgroundTransparency: report.Meta.BackgroundTransparency,
-		},
-		Issues:        issues,
-		FixCategories: fixCategories,
-	}
-}
-
-func issueFixAction(code string) (category string, unsafeRequired bool, automaticFix bool) {
-	switch code {
-	case "missing-xmlns", "missing-viewbox", "missing-size":
-		return string(svgcheck.FixCategoryMetadata), false, true
-	case "missing-bleed":
-		return string(svgcheck.FixCategoryBleed), false, true
-	case "script", "event-handler":
-		return string(svgcheck.FixCategorySafety), true, true
-	case "shadow-effect", "effects-may-not-output", "print-effects-require-flattening", "fabric-effects", "large-format-effects":
-		return string(svgcheck.FixCategoryEffects), true, true
-	case "raster-image", "inline-raster-image", "raster-not-cuttable", "large-format-raster":
-		return string(svgcheck.FixCategoryRaster), true, true
-	default:
-		return "", false, false
-	}
 }

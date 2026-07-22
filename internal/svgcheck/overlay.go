@@ -1,11 +1,8 @@
 package svgcheck
 
 import (
-	"bytes"
-	"encoding/xml"
 	"fmt"
 	"html"
-	"io"
 	"strconv"
 	"strings"
 )
@@ -18,29 +15,20 @@ type overlayData struct {
 	Meta       SVGMeta
 	Report     Report
 	Endpoints  []geometryEndpoint
-	ThinShapes []thinShape
-}
-
-type thinShape struct {
-	name  string
-	attrs map[string]string
+	ThinShapes []locatableShape
 }
 
 func GenerateOverlay(input []byte, opts OverlayOptions) ([]byte, error) {
-	report, details, err := checkWithDetails(input, opts.Target)
+	report, analysis, err := checkWithDetails(input, opts.Target)
 	if err != nil {
 		return nil, err
 	}
 	data := overlayData{Meta: report.Meta, Report: report}
 	if reportHasAnyIssue(report, "near-disconnected-lines") {
-		data.Endpoints = details.endpoints
+		data.Endpoints = analysis.Endpoints
 	}
 	if reportHasAnyIssue(report, "thin-stroke") {
-		overlayDetails, err := inspectOverlayData(input, report.Meta)
-		if err != nil {
-			return nil, err
-		}
-		data.ThinShapes = overlayDetails.ThinShapes
+		data.ThinShapes = analysis.ThinShapes
 	}
 
 	var out strings.Builder
@@ -78,42 +66,6 @@ func GenerateOverlay(input []byte, opts OverlayOptions) ([]byte, error) {
 	return []byte(out.String()), nil
 }
 
-func inspectOverlayData(input []byte, meta SVGMeta) (overlayData, error) {
-	decoder := xml.NewDecoder(bytes.NewReader(input))
-	data := overlayData{Meta: meta}
-	styleStack := []geometryStyle{defaultGeometryStyle()}
-
-	for {
-		token, err := decoder.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return data, fmt.Errorf("invalid SVG XML: %w", err)
-		}
-		switch tok := token.(type) {
-		case xml.StartElement:
-			attr := attrsByName(tok.Attr)
-			currentStyle := inheritedGeometryStyle(styleStack[len(styleStack)-1], attr)
-			styleStack = append(styleStack, currentStyle)
-			name := strings.ToLower(tok.Name.Local)
-			if isOverlayGeometryElement(name) {
-				if elementHasThinStroke(tok.Attr) {
-					data.ThinShapes = append(data.ThinShapes, thinShape{name: name, attrs: attr})
-				}
-			}
-		case xml.EndElement:
-			if len(styleStack) > 1 {
-				styleStack = styleStack[:len(styleStack)-1]
-			}
-		default:
-			continue
-		}
-	}
-
-	return data, nil
-}
-
 func writeOverlayDefs(out *strings.Builder) {
 	out.WriteString(`<defs>
   <filter id="ppt-overlay-shadow" x="-20%" y="-20%" width="140%" height="140%">
@@ -126,7 +78,7 @@ func writeOverlayDefs(out *strings.Builder) {
 `)
 }
 
-func writeThinShapeHighlights(out *strings.Builder, shapes []thinShape, scale float64) {
+func writeThinShapeHighlights(out *strings.Builder, shapes []locatableShape, scale float64) {
 	if len(shapes) == 0 {
 		return
 	}
@@ -208,7 +160,7 @@ func overlayMetaSummary(report Report) string {
 	return strings.Join(parts, " / ")
 }
 
-func writeHighlightedGeometry(out *strings.Builder, shape thinShape, stroke string, strokeWidth, opacity float64) {
+func writeHighlightedGeometry(out *strings.Builder, shape locatableShape, stroke string, strokeWidth, opacity float64) {
 	switch shape.name {
 	case "line":
 		fmt.Fprintf(out, `<line x1="%s" y1="%s" x2="%s" y2="%s"%s fill="none" stroke="%s" stroke-width="%s" stroke-linecap="round" stroke-linejoin="round" opacity="%s" pointer-events="none"/>`+"\n",
@@ -229,14 +181,6 @@ func isOverlayGeometryElement(name string) bool {
 	default:
 		return false
 	}
-}
-
-func elementHasThinStroke(attrs []xml.Attr) bool {
-	attr := attrsByName(attrs)
-	if strokeWidthLooksThin(attr["stroke-width"]) {
-		return true
-	}
-	return strokeWidthLooksThin(styleValue(attr["style"], "stroke-width"))
 }
 
 func styleValue(style, key string) string {
