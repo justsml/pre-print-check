@@ -1,6 +1,6 @@
 {
   "name": "pre-print-check",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Local SVG preflight and repair for print, cutters, engraving, large-format, and web workflows.",
   "type": "module",
   "main": "./npm/index.cjs",
